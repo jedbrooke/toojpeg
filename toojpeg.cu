@@ -4,7 +4,7 @@
 // see https://create.stephan-brumme.com/toojpeg/
 //
 
-#include "toojpeg.h"
+#include "toojpeg_modified.h"
 
 // - the "official" specifications: https://www.w3.org/Graphics/JPEG/itu-t81.pdf and https://www.w3.org/Graphics/JPEG/jfif3.pdf
 // - Wikipedia has a short description of the JFIF/JPEG file format: https://en.wikipedia.org/wiki/JPEG_File_Interchange_Format
@@ -45,6 +45,39 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		  99, 99, 99, 99, 99, 99, 99, 99,
 		  99, 99, 99, 99, 99, 99, 99, 99,
 		  99, 99, 99, 99, 99, 99, 99, 99 };
+
+	const float dct_matrix[8][8] = {
+		{ 0.353553, 0.353553, 0.353553, 0.353553, 0.353553, 0.353553, 0.353553,0.353553},
+		{ 0.490393, 0.415735, 0.277785, 0.0975452, -0.0975452, -0.277785, -0.415735,-0.490393},
+		{ 0.46194, 0.191342, -0.191342, -0.46194, -0.46194, -0.191342, 0.191342,0.46194},
+		{ 0.415735, -0.0975452, -0.490393, -0.277785, 0.277785, 0.490393, 0.0975453,-0.415735},
+		{ 0.353553, -0.353553, -0.353553, 0.353553, 0.353553, -0.353553, -0.353553,0.353553},
+		{ 0.277785, -0.490393, 0.0975452, 0.415735, -0.415735, -0.0975451, 0.490393,-0.277785},
+		{ 0.191342, -0.46194, 0.46194, -0.191342, -0.191342, 0.46194, -0.46194,0.191342},
+		{ 0.0975452, -0.277785, 0.415735, -0.490393, 0.490393, -0.415735, 0.277785,-0.0975448}
+	};
+
+	const float dct_matrix_transpose[8][8] = {
+		{ 0.353553, 0.490393, 0.46194, 0.415735, 0.353553, 0.277785, 0.191342,0.0975452},
+		{ 0.353553, 0.415735, 0.191342, -0.0975452, -0.353553, -0.490393, -0.46194,-0.277785},
+		{ 0.353553, 0.277785, -0.191342, -0.490393, -0.353553, 0.0975452, 0.46194,0.415735},
+		{ 0.353553, 0.0975452, -0.46194, -0.277785, 0.353553, 0.415735, -0.191342,-0.490393},
+		{ 0.353553, -0.0975452, -0.46194, 0.277785, 0.353553, -0.415735, -0.191342,0.490393},
+		{ 0.353553, -0.277785, -0.191342, 0.490393, -0.353553, -0.0975451, 0.46194,-0.415735},
+		{ 0.353553, -0.415735, 0.191342, 0.0975453, -0.353553, 0.490393, -0.46194,0.277785},
+		{ 0.353553, -0.490393, 0.46194, -0.415735, 0.353553, -0.277785, 0.191342,-0.0975448}
+	};
+
+	const float dct_correction_matrix[8][8] = {
+		{8.00000, 11.09631, 7.52311, 9.40692, 6.19024, 6.28556, 2.81439, 2.20719},
+		{11.09631,       1,       1,       1,       1,       1,       1,       1},
+		{9.05127,        1,       1,       1,       1,       1,       1,       1},
+		{9.40699,        1,       1,       1,       1,       1,       1,       1},
+		{4.14146,        1,       1,       1,       1,       1,       1,       1},
+		{6.28555,        1,       1,       1,       1,       1,       1,       1},
+		{3.48541,        1,       1,       1,       1,       1,       1,       1},
+		{2.20719,        1,       1,       1,       1,       1,       1,       1}
+	};
 
 	// 8x8 blocks are processed in zig-zag order
 	// most encoders use a zig-zag "forward" table, I switched to its inverse for performance reasons
@@ -248,20 +281,57 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		block5 = z7 + z2; block3 = z7 - z2;
 	}
 
+	void matmul_8x8(const float A[8][8], const float B[8][8], float C[8][8]) {
+		for (int i = 0; i < 8; i++)
+		{
+			for (int j = 0; j < 8; j++)
+			{ 
+				C[i][j] = 0;
+				for (int k = 0; k < 8; k++)
+				{
+					C[i][j] += A[i][k] * B[k][j];
+				}
+			}
+		}
+	}
+	void elementwise_mult_8x8(const float K[8][8],float A[8][8])
+	{
+		for (int i = 0; i < 8; i++)
+		{
+			for (int j = 0; j < 8; j++)
+			{
+				A[i][j] = K[i][j] * A[i][j];
+			}
+		}
+	}
+
+	void DCT_8x8(float A[8][8]){
+		float temp[8][8];
+		matmul_8x8(dct_matrix,A,temp);
+		matmul_8x8(temp,dct_matrix_transpose,A);
+		elementwise_mult_8x8(dct_correction_matrix,A);
+	}
+
 	// run DCT, quantize and write Huffman bit codes
 	int16_t encodeBlock(BitWriter& writer, float block[8][8], const float scaled[8*8], int16_t lastDC,
 						const BitCode huffmanDC[256], const BitCode huffmanAC[256], const BitCode* codewords)
 	{
+		// // DCT: rows
+		// for (auto offset = 0; offset < 8; offset++)
+		// 	DCT(block64 + offset*8, 1);
+		// // DCT: columns
+		// for (auto offset = 0; offset < 8; offset++)
+		// 	DCT(block64 + offset*1, 8);
+
+		/* 
+			Replace this with a gpu accelerated 8x8 DCT function
+		*/
+		/* DCT_8x8 */
+		DCT_8x8(block);
+
 		// "linearize" the 8x8 block, treat it as a flat array of 64 floats
 		auto block64 = (float*) block;
-
-		// DCT: rows
-		for (auto offset = 0; offset < 8; offset++)
-			DCT(block64 + offset*8, 1);
-		// DCT: columns
-		for (auto offset = 0; offset < 8; offset++)
-			DCT(block64 + offset*1, 8);
-
+		
 		// scale
 		for (auto i = 0; i < 8*8; i++)
 			block64[i] *= scaled[i];
@@ -272,6 +342,13 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		// quantize and zigzag the other 63 coefficients
 		auto posNonZero = 0; // find last coefficient which is not zero (because trailing zeros are encoded differently)
 		int16_t quantized[8*8];
+
+		/* 
+			CUDA Accelerate this too.
+			How efficient is it for these small matricies? 
+			Ideally we'd want to do many 8x8 blocks at a time but it seems that each block depends on the previous
+		*/
+
 		for (auto i = 1; i < 8*8; i++) // start at 1 because block64[0]=DC was already processed
 		{
 			auto value = block64[ZigZagInv[i]];
@@ -591,8 +668,8 @@ namespace TooJpeg
 						// YCbCr444 is easy - the more complex YCbCr420 has to be computed about 20 lines below in a second pass
 						if (!downsample)
 						{
-						Cb[deltaY][deltaX] = rgb2cb(r, g, b); // standard RGB-to-YCbCr conversion
-						Cr[deltaY][deltaX] = rgb2cr(r, g, b);
+							Cb[deltaY][deltaX] = rgb2cb(r, g, b); // standard RGB-to-YCbCr conversion
+							Cr[deltaY][deltaX] = rgb2cr(r, g, b);
 						}
 					}
 				}
