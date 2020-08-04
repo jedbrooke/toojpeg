@@ -16,6 +16,7 @@
 // TooJpeg::writeJpeg(myOutput, mypixels, 1024, 768);
 
 #pragma once
+#include <iostream>
 
 namespace TooJpeg
 {

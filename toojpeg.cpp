@@ -247,6 +247,16 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		block1 = z6 + z4; block7 = z6 - z4; // "phase 6"
 		block5 = z7 + z2; block3 = z7 - z2;
 	}
+	void print_array(float A[8*8])
+	{
+		std::cout << "{";
+		for (int i = 0; i < 63; i++)
+		{
+			std::cout << A[i] << ", ";
+		}
+		std::cout << A[63] << "}," << std::endl;
+		
+	}
 
 	// run DCT, quantize and write Huffman bit codes
 	int16_t encodeBlock(BitWriter& writer, float block[8][8], const float scaled[8*8], int16_t lastDC,
@@ -255,6 +265,9 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		// "linearize" the 8x8 block, treat it as a flat array of 64 floats
 		auto block64 = (float*) block;
 
+		// std::cout << "original input" << std::endl;
+		// print_array(block64);
+
 		// DCT: rows
 		for (auto offset = 0; offset < 8; offset++)
 			DCT(block64 + offset*8, 1);
@@ -262,9 +275,15 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		for (auto offset = 0; offset < 8; offset++)
 			DCT(block64 + offset*1, 8);
 
+		// std::cout << "DCT Transform" << std::endl;
+		// print_array(block64);
+		// std::cout << "---------------" << std::endl;
+		
+
 		// scale
 		for (auto i = 0; i < 8*8; i++)
 			block64[i] *= scaled[i];
+
 
 		// encode DC (the first coefficient is the "average color" of the 8x8 block)
 		auto DC = int(block64[0] + (block64[0] >= 0 ? +0.5f : -0.5f)); // C++11's nearbyint() achieves a similar effect
