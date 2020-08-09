@@ -4,3 +4,5 @@ examples/example
 .vscode/*
 examples/bmptest
 examples/example_large
+examples/earth.tif
+examples/earth.bmp
