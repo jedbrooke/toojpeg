@@ -2,3 +2,5 @@
 examples/example_modified
 examples/example
 .vscode/*
+examples/bmptest
+examples/example_large
