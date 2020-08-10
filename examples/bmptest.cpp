@@ -16,7 +16,7 @@ int main(int argc, char const *argv[])
     BMPImg image("tulip.bmp");
 
 
-    const auto quality    = 50;    // compression quality: 0 = worst, 100 = best, 80 to 90 are most often used
+    const auto quality    = 90;    // compression quality: 0 = worst, 100 = best, 80 to 90 are most often used
     const bool downsample = false; // false = save as YCbCr444 JPEG (better quality), true = YCbCr420 (smaller file)
     const char* comment = "TooJpeg example image"; // arbitrary JPEG comment
     auto ok = TooJpeg::writeJpeg(myOutput, image.pixels, image.width, image.height, image.isRGB, quality, downsample, comment);
