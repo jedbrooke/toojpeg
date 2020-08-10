@@ -6,3 +6,6 @@ examples/bmptest
 examples/example_large
 examples/earth.tif
 examples/earth.bmp
+examples/earth.jpg
+examples/example_large.bmp
+examples/example_large.jpg
