@@ -68,7 +68,7 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		{ 0.353553, -0.490393, 0.46194, -0.415735, 0.353553, -0.277785, 0.191342,-0.0975448}
 	};
 
-	const float dct_correction_matrix[8][8] = {
+	const float dct_correction_matrix[8][8] = { // combine with the other scale matrix
 		{8.00000, 11.09631, 7.52311, 9.40692, 6.19024, 6.28556, 2.81439, 2.20719},
 		{11.09631,       1,       1,       1,       1,       1,       1,       1},
 		{9.05127,        1,       1,       1,       1,       1,       1,       1},
@@ -319,6 +319,8 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 				posNonZero = i;
 		}
 
+		// return the quantized block
+
 		/* 
 			The rest of this stuff is for Huffman coding,
 			can probably be accelerated but lets focus on the DCT etc for now.
@@ -376,6 +378,179 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 
 		return DC;
 	}
+
+	/* 
+		placeholder for GPU accelerated version
+	*/
+	void transformBlock(float block[8][8], const float scaled[8*8], int16_t quantized[8*8])
+	{
+		/* 
+			STEP 1: DCT
+			Paralellizability: strong (matmul)
+			Status: done, needs implementing
+		*/
+		/* gpu accelerated 8x8 DCT function */
+		DCT_8x8(block);
+
+		// "linearize" the 8x8 block, treat it as a flat array of 64 floats
+		auto block64 = (float*) block;
+		
+
+		/* 
+			Step 2: Scale
+			Paralellizability: Strong (for loop)
+			Status: not done
+		*/
+		for (auto i = 0; i < 8*8; i++)
+			block64[i] *= scaled[i];
+
+
+		// quantize and zigzag the other 63 coefficients
+		auto posNonZero = 0; // find last coefficient which is not zero (because trailing zeros are encoded differently)
+		/* 
+			Step 3: Quantization
+			Paralellizability: Strong (double for loop)
+			Status: not done
+		*/
+
+		for (auto i = 0; i < 8*8; i++)
+		{
+			auto value = block64[ZigZagInv[i]];
+			// round to nearest integer
+			quantized[i] = int(value + (value >= 0 ? +0.5f : -0.5f)); // C++11's nearbyint() achieves a similar effect
+			// remember offset of last non-zero coefficient
+			if (quantized[i] != 0)
+				posNonZero = i;
+		}
+	}
+
+	/* 
+		data is an aray of n 8*8 blocks
+		scale is an array of 8*8
+		posNonZero will store the position of the last non zero value for each N blocks
+		n is the number of blocks
+	*/
+	
+	void transformBlock_many(float* const data, const float* const scale, float* const posNonZero, const uint32_t n)
+	{
+		// DCT
+		// Scale (remove scale step from DCT and combine the scale matrix there with the one here so it's only 1 step instead of 2)
+		// quantize (process many blocks at a time with paralell inside each block too)
+		// find pos non zero (paralell many blocks but serial inside block)
+			// start counting from back and stop at first non-zero value, can skip most of the block then
+		 
+	}
+
+	/* 
+		data is (width * height) * 3
+		data[i] = r, data[i + 1] = g, data[i + 2] = b
+		Y is stored as (width/8 * height/8) * (8x8 Y block)
+		etc for Cb, Cr
+	*/
+	void convertRGBtoYCbCr444(uint8_t* data, const int width, const int height, float* Y, float* Cb, float* Cr);
+	{
+		// Y = rgb2Y(data)
+			// Y = Y - 128.f, probably in the same kernel so we dont need a deviceSynchronize
+		// Cb = rgb2Cb(data)
+		// Cr = rgb2Cr(data)
+		// cudaDeviceSynchronize
+	}
+
+	/* 
+		Y is stored as (width/8 * height/8) * (8x8 Y block)
+		Cb/Cr is stored as (width/16 * height/16) * (1 Cb 8x8 block / 1 Cr 8x8 block)
+	*/
+	void convertRGBtoYCbCr420(uint8_t* data, const int width, const int height, float* Y, float* Cb, float* Cr)
+	{
+		// Y = rgb2Y(data)
+			// Y = Y - 128.f, probably in the same kernel so we dont need a deviceSynchronize
+		// downscale RGB to 1/4 size with averages
+		// wait for the downscale kernel to finish
+		// Cb = rgb2Cb(data)
+		// Cr = rgb2Cr(data)
+		// cudaDeviceSynchronize
+	}
+
+	/* 
+		data is n * (width * height), 
+		Y is returned in data
+	*/
+	void convertBWtoY(uint8_t* data, const int width, const int height, )
+	{
+		// Y = pixel - 128.f but in CUDA
+	}
+
+	/* 
+		writes and huffman encodes the block
+	*/
+	int16_t writeBlock(BitWriter& writer, float block[8][8],int16_t lastDC,
+		const BitCode huffmanDC[256], const BitCode huffmanAC[256], const BitCode* codewords, int posNonZero)
+	{
+		auto block64 = (float*) block;
+		/* 
+			Step 5: Begin HuffmanEncoding
+			Paralellizability: none, each block depends on previous
+			Status: not done
+		*/
+
+		// same "average color" as previous block ?
+		auto DC = int(block64[0] + (block64[0] >= 0 ? +0.5f : -0.5f));
+		auto diff = DC - lastDC;
+		if (diff == 0)
+			writer << huffmanDC[0x00];   // yes, write a special short symbol
+		else
+		{
+			auto bits = codewords[diff]; // nope, encode the difference to previous block's average color
+			writer << huffmanDC[bits.numBits] << bits;
+		}
+
+		/* 
+			Step 6: Write the huffman encoded bits
+			Paralellizability: none (file io, bytes must be written in order)
+			Status: not done
+		*/
+
+		// encode ACs (quantized[1..63])
+		auto offset = 0; // upper 4 bits count the number of consecutive zeros
+		for (auto i = 1; i <= posNonZero; i++) // quantized[0] was already written, skip all trailing zeros, too
+		{
+			// zeros are encoded in a special way
+			while (quantized[i] == 0) // found another zero ?
+			{
+				offset    += 0x10; // add 1 to the upper 4 bits
+				// split into blocks of at most 16 consecutive zeros
+				if (offset > 0xF0) // remember, the counter is in the upper 4 bits, 0xF = 15
+				{
+				writer << huffmanAC[0xF0]; // 0xF0 is a special code for "16 zeros"
+				offset = 0;
+				}
+				i++;
+			}
+
+			auto encoded = codewords[quantized[i]];
+			// combine number of zeros with the number of bits of the next non-zero value
+			writer << huffmanAC[offset + encoded.numBits] << encoded; // and the value itself
+			offset = 0;
+		}
+
+		// send end-of-block code (0x00), only needed if there are trailing zeros
+		if (posNonZero < 8*8 - 1) // = 63
+			writer << huffmanAC[0x00];
+
+		return DC;
+	}
+
+
+
+	void writeBlock_many(BitWriter& writer, float* const data, const uint32_t n, const BitCode huffmanDC[256], const BitCode huffmanAC[256], const BitCode* codewords)
+	{
+		// for block in data
+			// compare to DC of last block
+			// encode non-zeros in block
+			// encode zeros in block
+	
+	}
+
 
 	// Jon's code includes the pre-generated Huffman codes
 	// I don't like these "magic constants" and compute them on my own :-)
@@ -460,6 +635,8 @@ namespace TooJpeg
 		// convert to an internal JPEG quality factor, formula taken from libjpeg
 		quality = quality < 50 ? 5000 / quality : 200 - quality * 2;
 
+
+		/* Probably not worth paralellizing this step since it's only 64 loops */
 		uint8_t quantLuminance  [8*8];
 		uint8_t quantChrominance[8*8];
 		for (auto i = 0; i < 8*8; i++)
@@ -605,6 +782,28 @@ namespace TooJpeg
 		const auto sampling = downsample ? 2 : 1; // 1x1 or 2x2 sampling
 		const auto mcuSize  = 8 * sampling;
 
+
+		/* 
+			steps taken in the loop:
+			Step 1: convert rgb into YCbCr
+			Parelellizability: strong (loops)
+
+			Step 2: Encode Y
+			Paralellizability: medium
+				if we break it up into DCT, scaling, then writing, 
+				we can DCT and scale all the Y block in GPU then
+				finish the writing on the CPU
+			
+			Step 3: Perform Downsampling (is applicable)
+			Paralellizability: strong (loops)
+				can move up into first step of converting rgb to YCbCr
+
+			Step 4: Encode Cb and Cr
+			Paralellizability: medium (see step 3)
+
+		*/
+
+
 		// average color of the previous MCU
 		int16_t lastYDC = 0, lastCbDC = 0, lastCrDC = 0;
 		// convert from RGB to YCbCr
@@ -627,7 +826,7 @@ namespace TooJpeg
 						// find actual pixel position within the current image
 						auto pixelPos = row * int(width) + column; // the cast ensures that we don't run into multiplication overflows
 						if (column < maxWidth)
-						column++;
+							column++;
 
 						// grayscale images have solely a Y channel which can be easily derived from the input pixel by shifting it by 128
 						if (!isRGB)
