@@ -290,6 +290,7 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 	void transformBlock_many(float* const data, const float* const scale, float* const posNonZero, const uint32_t n)
 	{
 		// DCT
+		
 		// Scale (remove scale step from DCT and combine the scale matrix there with the one here so it's only 1 step instead of 2)
 		// quantize (process many blocks at a time with paralell inside each block too)
 		// find pos non zero (paralell many blocks but serial inside block)
@@ -303,20 +304,21 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		Y is stored as (width/8 * height/8) * (8x8 Y block)
 		etc for Cb, Cr
 	*/
-	void convertRGBtoYCbCr444(uint8_t* data, const int width, const int height, float* Y, float* Cb, float* Cr);
+	int convertRGBtoYCbCr444(uint8_t* data, const int width, const int height, float* Y, float* Cb, float* Cr);
 	{
 		// Y = rgb2Y(data)
 			// Y = Y - 128.f, probably in the same kernel so we dont need a deviceSynchronize
 		// Cb = rgb2Cb(data)
 		// Cr = rgb2Cr(data)
 		// cudaDeviceSynchronize
+		// n = number of 8x8 blocks in Y
 	}
 
 	/* 
 		Y is stored as (width/8 * height/8) * (8x8 Y block)
 		Cb/Cr is stored as (width/16 * height/16) * (1 Cb 8x8 block / 1 Cr 8x8 block)
 	*/
-	void convertRGBtoYCbCr420(uint8_t* data, const int width, const int height, float* Y, float* Cb, float* Cr)
+	int convertRGBtoYCbCr420(uint8_t* data, const int width, const int height, float* Y, float* Cb, float* Cr)
 	{
 		// Y = rgb2Y(data)
 			// Y = Y - 128.f, probably in the same kernel so we dont need a deviceSynchronize
@@ -325,15 +327,17 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		// Cb = rgb2Cb(data)
 		// Cr = rgb2Cr(data)
 		// cudaDeviceSynchronize
+		// n = number of 8*8 blocks in Y, length of Cb,Cr is 1/4 N
 	}
 
 	/* 
-		data is n * (width * height), 
-		Y is returned in data
+		data is (width * height) BW pixel values, 
+		Y is returned in data as n 8x8 blocks
 	*/
-	void convertBWtoY(uint8_t* data, const int width, const int height, )
+	int convertBWtoY(uint8_t* data, const int width, const int height)
 	{
 		// Y = pixel - 128.f but in CUDA
+		// int n = number of 8x8 blocks 
 	}
 
 	/* 
