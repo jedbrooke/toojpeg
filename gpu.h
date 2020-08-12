@@ -1,20 +1,7 @@
-using uint8_t  = unsigned char;
-using uint16_t = unsigned short;
-using  int16_t =          short;
-using  int32_t =          int; // at least four bytes
-using uint32_t = unsigned int;
+#include "constants.h"
 
 namespace gpu
 {
-
-    /* 
-		data is an aray of n 8*8 blocks
-		scale is an array of 8*8
-		posNonZero will store the position of the last non zero value for each N blocks
-		n is the number of blocks
-	*/
-	void transformBlock_many(float* const data, const float* const scale, float* const posNonZero, const uint32_t n);
-    
     /* 
 		converts rgb to YCbCr444 and reshapes data from pixels into array of 8x8 blocks
         data is (width * height) * 3
@@ -35,4 +22,12 @@ namespace gpu
 		Y is returned in data as n 8x8 blocks
 	*/
 	int convertBWtoY(uint8_t* data, const int width, const int height);
+
+    /* 
+		data is an aray of n 8*8 blocks
+		scale is an array of 8*8
+		posNonZero will store the position of the last non zero value for each N blocks
+		n is the number of blocks
+	*/
+	void transformBlock_many(float* const data, const float* const scale, float* const posNonZero, const uint32_t n);
 }

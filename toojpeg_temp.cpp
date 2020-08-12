@@ -26,72 +26,6 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 	// ////////////////////////////////////////
 	// constants
 
-	// quantization tables from JPEG Standard, Annex K
-	const uint8_t DefaultQuantLuminance[8*8] =
-		{ 16, 11, 10, 16, 24, 40, 51, 61, // there are a few experts proposing slightly more efficient values,
-		  12, 12, 14, 19, 26, 58, 60, 55, // e.g. https://www.imagemagick.org/discourse-server/viewtopic.php?t=20333
-		  14, 13, 16, 24, 40, 57, 69, 56, // btw: Google's Guetzli project optimizes the quantization tables per image
-		  14, 17, 22, 29, 51, 87, 80, 62,
-		  18, 22, 37, 56, 68,109,103, 77,
-		  24, 35, 55, 64, 81,104,113, 92,
-		  49, 64, 78, 87,103,121,120,101,
-		  72, 92, 95, 98,112,100,103, 99 };
-	const uint8_t DefaultQuantChrominance[8*8] =
-		{ 17, 18, 24, 47, 99, 99, 99, 99,
-		  18, 21, 26, 66, 99, 99, 99, 99,
-		  24, 26, 56, 99, 99, 99, 99, 99,
-		  47, 66, 99, 99, 99, 99, 99, 99,
-		  99, 99, 99, 99, 99, 99, 99, 99,
-		  99, 99, 99, 99, 99, 99, 99, 99,
-		  99, 99, 99, 99, 99, 99, 99, 99,
-		  99, 99, 99, 99, 99, 99, 99, 99 };
-
-	const float dct_matrix[8][8] = {
-		{ 0.353553, 0.353553, 0.353553, 0.353553, 0.353553, 0.353553, 0.353553,0.353553},
-		{ 0.490393, 0.415735, 0.277785, 0.0975452, -0.0975452, -0.277785, -0.415735,-0.490393},
-		{ 0.46194, 0.191342, -0.191342, -0.46194, -0.46194, -0.191342, 0.191342,0.46194},
-		{ 0.415735, -0.0975452, -0.490393, -0.277785, 0.277785, 0.490393, 0.0975453,-0.415735},
-		{ 0.353553, -0.353553, -0.353553, 0.353553, 0.353553, -0.353553, -0.353553,0.353553},
-		{ 0.277785, -0.490393, 0.0975452, 0.415735, -0.415735, -0.0975451, 0.490393,-0.277785},
-		{ 0.191342, -0.46194, 0.46194, -0.191342, -0.191342, 0.46194, -0.46194,0.191342},
-		{ 0.0975452, -0.277785, 0.415735, -0.490393, 0.490393, -0.415735, 0.277785,-0.0975448}
-	};
-
-	const float dct_matrix_transpose[8][8] = {
-		{ 0.353553, 0.490393, 0.46194, 0.415735, 0.353553, 0.277785, 0.191342,0.0975452},
-		{ 0.353553, 0.415735, 0.191342, -0.0975452, -0.353553, -0.490393, -0.46194,-0.277785},
-		{ 0.353553, 0.277785, -0.191342, -0.490393, -0.353553, 0.0975452, 0.46194,0.415735},
-		{ 0.353553, 0.0975452, -0.46194, -0.277785, 0.353553, 0.415735, -0.191342,-0.490393},
-		{ 0.353553, -0.0975452, -0.46194, 0.277785, 0.353553, -0.415735, -0.191342,0.490393},
-		{ 0.353553, -0.277785, -0.191342, 0.490393, -0.353553, -0.0975451, 0.46194,-0.415735},
-		{ 0.353553, -0.415735, 0.191342, 0.0975453, -0.353553, 0.490393, -0.46194,0.277785},
-		{ 0.353553, -0.490393, 0.46194, -0.415735, 0.353553, -0.277785, 0.191342,-0.0975448}
-	};
-
-	const float dct_correction_matrix[8][8] = { // combine with the other scale matrix
-		{8.00000, 11.09631, 7.52311, 9.40692, 6.19024, 6.28556, 2.81439, 2.20719},
-		{11.09631,       1,       1,       1,       1,       1,       1,       1},
-		{9.05127,        1,       1,       1,       1,       1,       1,       1},
-		{9.40699,        1,       1,       1,       1,       1,       1,       1},
-		{4.14146,        1,       1,       1,       1,       1,       1,       1},
-		{6.28555,        1,       1,       1,       1,       1,       1,       1},
-		{3.48541,        1,       1,       1,       1,       1,       1,       1},
-		{2.20719,        1,       1,       1,       1,       1,       1,       1}
-	};
-
-	// 8x8 blocks are processed in zig-zag order
-	// most encoders use a zig-zag "forward" table, I switched to its inverse for performance reasons
-	// note: ZigZagInv[ZigZag[i]] = i
-	const uint8_t ZigZagInv[8*8] =
-		{  0, 1, 8,16, 9, 2, 3,10,   // ZigZag[] =  0, 1, 5, 6,14,15,27,28,
-		  17,24,32,25,18,11, 4, 5,   //             2, 4, 7,13,16,26,29,42,
-		  12,19,26,33,40,48,41,34,   //             3, 8,12,17,25,30,41,43,
-		  27,20,13, 6, 7,14,21,28,   //             9,11,18,24,31,40,44,53,
-		  35,42,49,56,57,50,43,36,   //            10,19,23,32,39,45,52,54,
-		  29,22,15,23,30,37,44,51,   //            20,22,33,38,46,51,55,60,
-		  58,59,52,45,38,31,39,46,   //            21,34,37,47,50,56,59,61,
-		  53,60,61,54,47,55,62,63 }; //            35,36,48,49,57,58,62,63
-
 	// static Huffman code tables from JPEG standard Annex K
 	// - CodesPerBitsize tables define how many Huffman codes will have a certain bitsize (plus 1 because there nothing with zero bits),
 	//   e.g. DcLuminanceCodesPerBitsize[2] = 5 because there are 5 Huffman codes being 2+1=3 bits long
@@ -442,8 +376,8 @@ namespace TooJpeg
 		uint8_t quantChrominance[8*8];
 		for (auto i = 0; i < 8*8; i++)
 		{
-			int luminance   = (DefaultQuantLuminance  [ZigZagInv[i]] * quality + 50) / 100;
-			int chrominance = (DefaultQuantChrominance[ZigZagInv[i]] * quality + 50) / 100;
+			int luminance   = (constants::DefaultQuantLuminance  [constants::ZigZagInv[i]] * quality + 50) / 100;
+			int chrominance = (constants::DefaultQuantChrominance[constants::ZigZagInv[i]] * quality + 50) / 100;
 
 			// clamp to 1..255
 			quantLuminance  [i] = clamp(luminance,   1, 255);
@@ -539,14 +473,14 @@ namespace TooJpeg
 		float scaledChrominance[8*8];
 		for (auto i = 0; i < 8*8; i++)
 		{
-			auto row    = ZigZagInv[i] / 8; // same as ZigZagInv[i] >> 3
-			auto column = ZigZagInv[i] % 8; // same as ZigZagInv[i] &  7
+			auto row    = constants::ZigZagInv[i] / 8; // same as ZigZagInv[i] >> 3
+			auto column = constants::ZigZagInv[i] % 8; // same as ZigZagInv[i] &  7
 
 			// scaling constants for AAN DCT algorithm: AanScaleFactors[0] = 1, AanScaleFactors[k=1..7] = cos(k*PI/16) * sqrt(2)
 			static const float AanScaleFactors[8] = { 1, 1.387039845f, 1.306562965f, 1.175875602f, 1, 0.785694958f, 0.541196100f, 0.275899379f };
 			auto factor = 1 / (AanScaleFactors[row] * AanScaleFactors[column] * 8);
-			scaledLuminance  [ZigZagInv[i]] = factor / quantLuminance  [i];
-			scaledChrominance[ZigZagInv[i]] = factor / quantChrominance[i];
+			scaledLuminance  [constants::ZigZagInv[i]] = factor / quantLuminance  [i];
+			scaledChrominance[constants::ZigZagInv[i]] = factor / quantChrominance[i];
 			// if you really want JPEGs that are bitwise identical to Jon Olick's code then you need slightly different formulas (note: sqrt(8) = 2.828427125f)
 			//static const float aasf[] = { 1.0f * 2.828427125f, 1.387039845f * 2.828427125f, 1.306562965f * 2.828427125f, 1.175875602f * 2.828427125f, 1.0f * 2.828427125f, 0.785694958f * 2.828427125f, 0.541196100f * 2.828427125f, 0.275899379f * 2.828427125f }; // line 240 of jo_jpeg.cpp
 			//scaledLuminance  [ZigZagInv[i]] = 1 / (quantLuminance  [i] * aasf[row] * aasf[column]); // lines 266-267 of jo_jpeg.cpp
