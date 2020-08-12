@@ -3,6 +3,14 @@
 namespace gpu
 {
     /* 
+		loads DCT tranform matricies and other constants in to device memory
+	*/
+	void initializeDevice();
+	/* 
+		frees device memory
+	*/
+	void retireDevice();
+	/* 
 		converts rgb to YCbCr444 and reshapes data from pixels into array of 8x8 blocks
         data is (width * height) * 3
 		data[i] = r, data[i + 1] = g, data[i + 2] = b
@@ -28,6 +36,7 @@ namespace gpu
 		scale is an array of 8*8
 		posNonZero will store the position of the last non zero value for each N blocks
 		n is the number of blocks
+		quantized is the quantized result of the transformation
 	*/
-	void transformBlock_many(float* const data, const float* const scale, float* const posNonZero, const uint32_t n);
+	void transformBlock_many(float* const data, const float* const scale, const uint32_t n, uint8_t* const posNonZero, int16_t* quantized);
 }

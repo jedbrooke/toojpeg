@@ -49,6 +49,17 @@ namespace constants
         0.353553, -0.490393, 0.46194, -0.415735, 0.353553, -0.277785, 0.191342,-0.0975448
     };
 
+    const float dct_correction_matrix[8*8] = {
+        8.00000, 11.09631, 7.52311, 9.40692, 6.19024, 6.28556, 2.81439, 2.20719,
+        11.09631,       1,       1,       1,       1,       1,       1,       1,
+        9.05127,        1,       1,       1,       1,       1,       1,       1,
+        9.40699,        1,       1,       1,       1,       1,       1,       1,
+        4.14146,        1,       1,       1,       1,       1,       1,       1,
+        6.28555,        1,       1,       1,       1,       1,       1,       1,
+        3.48541,        1,       1,       1,       1,       1,       1,       1,
+        2.20719,        1,       1,       1,       1,       1,       1,       1
+    };
+
     // 8x8 blocks are processed in zig-zag order
     // most encoders use a zig-zag "forward" table, I switched to its inverse for performance reasons
     // note: ZigZagInv[ZigZag[i]] = i

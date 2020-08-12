@@ -2,6 +2,24 @@
 
 namespace // anonymous namespace for helper functions
 { 
+    bool isDCTConstsLoaded = false;
+    float* dct_matrix_cuda;
+    float* dct_matrix_transpose_cuda;
+    void loadDCTConstants() // could maybe return the cuda error value if you want to do some quick exception handling
+    {   
+        cudaMalloc(&dct_matrix_cuda,           constants::block_size_mem);
+        cudaMalloc(&dct_matrix_transpose_cuda, constants::block_size_mem);
+        
+        cudaMemcpy(dct_matrix_cuda,           constants::dct_matrix,           constants::block_size_mem, cudaMemcpyHostToDevice);
+        cudaMemcpy(dct_matrix_transpose_cuda, constants::dct_matrix_transpose, constants::block_size_mem, cudaMemcpyHostToDevice);
+    }
+
+    void unloadDCTConstants()
+    {
+        cudaFree(dct_matrix_cuda);
+        cudaFree(dct_matrix_transpose_cuda);
+    }
+
     __global__
     void elementwise_mult_8x8_multi(const float* K, float* A)
     {   
@@ -67,10 +85,8 @@ namespace // anonymous namespace for helper functions
     void DCT8x8_many(float* data, const uint32_t n, float* scale)
     {
         float* temp;
-        cudaMallocManaged(&temp,n * constants::block_size_mem);
+        cudaMalloc(&temp,n * constants::block_size_mem);
         cudaMemset(temp,0,array_size);
-
-        cudaMallocManaged(scale,constants::block_size_mem);
 
         matmul_8x8_multi_step1<<<n,constants::block_size>>>(dct_matrix,data,temp,n);
 
@@ -86,7 +102,6 @@ namespace // anonymous namespace for helper functions
         cudaDeviceSynchronize();
         
         cudaFree(temp);
-        cudaFree(scale);
 
     }
 
@@ -94,7 +109,16 @@ namespace // anonymous namespace for helper functions
         data is n 8x8 blocks of data to be quantized
         quantized is n 8x8 blocks of ints returned
     */
-    void quantize_many(const float* data, const int n, int16_t* quantized);
+    __global__
+    void quantize_many(const float* data, const int n, int16_t* quantized)
+    {
+        int index = blockIdx.x * blockDim.x + threadIdx.x;
+        int stride = blockDim.x * gridDim.x;
+        for(int i = index; i < n * constants::block_size; i+= stride)
+        {
+           quantized[i] = __float2int_rn(data[i]); 
+        }
+    }
 
     /* 
         quantized is n 8x8 blocks
@@ -103,8 +127,25 @@ namespace // anonymous namespace for helper functions
         it's a uint8 since the number can only be [0...63] (5bits)
 
     */
-    void find_posNonZero_many(const int16_t* quantized, const uint32_t n, uint8_t* posNonZeros);
-
+    __global__
+    void find_posNonZero_many(const int16_t* quantized, const uint32_t n, uint8_t* posNonZeros)
+    {
+        int index = blockIdx.x * blockDim.x + threadIdx.x;
+        int stride = blockDim.x * gridDim.x;
+        for(auto c = index; c < n; c+= stride)
+        {
+            int16_t* block = &quantized[c * constants::block_size];
+            // for loops are evil >:(
+            for(auto i = constants::block_size - 1; i >= 0; i--) // go bakcwards until we find a non-zero, then we can end the loop
+            {
+                if (block[i] == 0)
+                {
+                    posNonZeros[c] = i;
+                    break;
+                }
+            }
+        }
+    }
 }
 
 namespace gpu
@@ -157,17 +198,51 @@ namespace gpu
 		posNonZero will store the position of the last non zero value for each N blocks
 		n is the number of blocks
 	*/
-	void transformBlock_many(float* const data, const float* const scale, float* const posNonZero, const uint32_t n)
+	void transformBlock_many(float* const data, const float* const scale, const uint32_t n, uint8_t* const posNonZero, int16_t* quantized)
 	{
         // Prepare scale matrix
+            // elementwise mult the given scale matrix with the dct correction matrix
+        float* new_scale;
+        cudaMallocManaged(&new_scale,constants::block_size_mem);
+        for(int i = 0; i < constants::block_size; i++)
+            new_scale[i] = constants::dct_correction_matrix[i] * scale[i];
 
         // DCT and Scale
-        cudaMallocManaged(&constants::dct_matrix,           constants::block_size_mem);
-        cudaMallocManaged(&constants::dct_matrix_transpose, constants::block_size_mem);
-        // quantize (process many blocks at a time with paralell inside each block too)
+        if(!isDCTConstsLoaded)
+        {
+            loadDCTConstants();
+        }
+        float* data_cuda;
+        cudaMalloc(&data_cuda, n*constants::block_size_mem);
+        cudaMemcpy(data_cuda,data, n*constants::block_size_mem, cudaMemcpyHostToDevice);
         
+        DCT8x8_many(data_cuda, n, scale);
+
+        // quantize (process many blocks at a time with paralell inside each block too)
+        int16_t* quantized_cuda;
+        cudaMalloc(&quantized_cuda,n * constants::block_size_mem);
+        quantize_many<<<n,constants::block_size>>>(data_cuda,n,quantized_cuda);
+        cudaDeviceSynchronize();
+
+        cudaFree(data_cuda);
+
 		// find pos non zero (paralell many blocks but serial inside block)
-			// start counting from back and stop at first non-zero value, can skip most of the block then
-		 
+            // start counting from back and stop at first non-zero value, can skip most of the block then
+        uint8_t* posNonZeros_cuda;
+        cudaMalloc(&posNonZeros_cuda, n * sizeof(uint8_t));
+
+        int cu_blockSize = 256;
+        int cu_numBlocks = (n / cu_blockSize) + 1
+
+        find_posNonZero_many<<<cu_numBlocks,cu_blockSize>>>(quantized_cuda, n, posNonZeros_cuda);
+        cudaDeviceSynchronize();
+
+        // copy data back from the device to the cpu
+        cudaMemcpy(quantized,   quantized_cuda,   n * constants::block_size_mem, cudaMemcpyDeviceToHost);
+        cudaMemcpy(posNonZeros, posNonZeros_cuda, n * sizeof(uint8_t),           cudaMemcpyDeviceToHost);
+        
+        cudaFree(new_scale);
+        cudaFree(quantized_cuda);
+        cudaFree(posNonZeros_cuda);
 	}
 }
