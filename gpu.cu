@@ -2,22 +2,27 @@
 
 namespace // anonymous namespace for helper functions
 { 
-    bool isDCTConstsLoaded = false;
+    bool isTransformConstsLoaded = false;
     float* dct_matrix_cuda;
     float* dct_matrix_transpose_cuda;
-    void loadDCTConstants() // could maybe return the cuda error value if you want to do some quick exception handling
+    float* ZigZagInv_cuda;
+    
+    void loadTransformConstants() // could maybe return the cuda error value if you want to do some quick exception handling
     {   
         cudaMalloc(&dct_matrix_cuda,           constants::block_size_mem);
         cudaMalloc(&dct_matrix_transpose_cuda, constants::block_size_mem);
+        cudaMalloc(&ZigZagInv_cuda,            constants::block_size_mem);
         
         cudaMemcpy(dct_matrix_cuda,           constants::dct_matrix,           constants::block_size_mem, cudaMemcpyHostToDevice);
         cudaMemcpy(dct_matrix_transpose_cuda, constants::dct_matrix_transpose, constants::block_size_mem, cudaMemcpyHostToDevice);
+        cudaMemcpy(ZigZagInv_cuda,            constants::ZigZagInv,            constants::block_size_mem, cudaMemcpyHostToDevice);
     }
 
-    void unloadDCTConstants()
+    void unloadTransformConstants()
     {
         cudaFree(dct_matrix_cuda);
         cudaFree(dct_matrix_transpose_cuda);
+        cudaFree(ZigZagInv_cuda);
     }
 
     __global__
@@ -108,6 +113,7 @@ namespace // anonymous namespace for helper functions
     /* 
         data is n 8x8 blocks of data to be quantized
         quantized is n 8x8 blocks of ints returned
+        this needs to be zigzagged
     */
     __global__
     void quantize_many(const float* data, const int n, int16_t* quantized)
@@ -116,7 +122,7 @@ namespace // anonymous namespace for helper functions
         int stride = blockDim.x * gridDim.x;
         for(int i = index; i < n * constants::block_size; i+= stride)
         {
-           quantized[i] = __float2int_rn(data[i]); 
+            quantized[i] = __float2int_rn(data[ZigZagInv_cuda[i]]);
         }
     }
 
@@ -208,9 +214,9 @@ namespace gpu
             new_scale[i] = constants::dct_correction_matrix[i] * scale[i];
 
         // DCT and Scale
-        if(!isDCTConstsLoaded)
+        if(!isTransformConstsLoaded)
         {
-            loadDCTConstants();
+            loadTransformConstants();
         }
         float* data_cuda;
         cudaMalloc(&data_cuda, n*constants::block_size_mem);
