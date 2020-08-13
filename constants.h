@@ -75,4 +75,6 @@ namespace constants
 
     const auto block_size = 8 * 8;
     const auto block_size_mem = block_size * sizeof(float);
+
+    enum conversions {YConv, CbConv, CrConv};
 }

@@ -152,6 +152,69 @@ namespace // anonymous namespace for helper functions
             }
         }
     }
+
+    __global__ 
+    void convertRGBtoY(const uint8_t* pixels, const int n, float* Y)
+    {
+        auto const index = blockIdx.x * blockDim.x + threadIdx.x;
+        auto const stride = blockDim.x * gridDim.x * 3; // 3 color components r,g,b
+        for(auto i = index; i < n; i += stride)
+        {
+            Y[i] = +0.299f * pixels[i + 0] + 0.587f * pixels[i + 1] + 0.114f * pixels[i + 2];
+            Y[i] =- 128.f;
+        } 
+    }
+
+    __global__ 
+    void convertRGBtoCb(const uint8_t* pixels, const int n, float* Cb)
+    {
+        auto const index = blockIdx.x * blockDim.x + threadIdx.x;
+        auto const stride = blockDim.x * gridDim.x * 3; // 3 color components r,g,b
+        for(auto i = index; i < n; i += stride)
+        {
+            Cb[i] = -0.16874f * pixels[i + 0] - 0.33126f * pixels[i + 1] + 0.5f * pixels[i + 2];
+        } 
+    }
+
+    __global__ 
+    void convertRGBtoCr(const uint8_t* pixels, const int n, float* Cr)
+    {
+        auto const index = blockIdx.x * blockDim.x + threadIdx.x;
+        auto const stride = blockDim.x * gridDim.x * 3; // 3 color components r,g,b
+        for(auto i = index; i < n; i += stride)
+        {
+            Cr[i] = +0.5f * pixels[i + 0] - 0.41869f * pixels[i + 1] +0.5f * pixels[i + 2];
+        } 
+    }
+
+    __global__
+    void reshape_data_to_blocks(float* data, const int width, const int height)
+    {
+        
+    }
+
+    void launchConversionKernel(const uint8_t* pixels, const int n, float* output, auto conversion)
+    {
+        // convert the color data
+        auto const cu_blockSize = 256;
+        auto const cu_numBlocks = (n / cu_blockSize) + 1;
+        switch(conversion)
+        {
+            case constants::YConv:
+                convertRGBtoY<<<cu_numBlocks,cu_blockSize>>>(pixels,n,output);
+                break;
+            case constants::CbConv:
+                convertRGBtoCb<<<cu_numBlocks,cu_blockSize>>>(pixels,n,output);
+                break;
+            case constants::CrConv:
+                convertRGBtoCr<<<cu_numBlocks,cu_blockSize>>>(pixels,n,output);
+        }
+        cudaStreamSynchronize(0);
+        // reshape the data in to 8x8 blocks
+
+    }
+
+
 }
 
 namespace gpu
@@ -164,12 +227,45 @@ namespace gpu
 	*/
 	int convertRGBtoYCbCr444(uint8_t* data, const int width, const int height, float* Y, float* Cb, float* Cr)
 	{
-		// Y = rgb2Y(data)
-			// Y = Y - 128.f, probably in the same kernel so we dont need a deviceSynchronize
+        // prepare memory
+        uint8_t* pixels_cuda;
+        float* Y_cuda;
+        float* Cb_cuda;
+        float* Cr_cuda;
+
+
+        auto n_datas = width * height * 3;
+        // n = total num items (width*height) * 3
+        // width and height are each rounded up to nearest multiple of 8 to prepare for converting data to 8x8 blocks
+        auto n_padded = (width + (width % 8 == 0 ? 0 : 8 - (width % 8))) * (height + (height % 8 == 0 ? 0 : 8 - (height % 8)));
+
+        // allocate all the memory on the GPU
+        cudaMalloc(&pixels_cuda, n_datas * sizeof(uint8_t));
+        cudaMemcpy(pixels_cuda, data, n_datas * sizeof(uint8_t), cudaMemcpyHostToDevice);
+
+        cudaMalloc(&Y_cuda,  n_padded * sizeof(float));
+        cudaMalloc(&Cb_cuda, n_padded * sizeof(float));
+        cudaMalloc(&Cr_cuda, n_padded * sizeof(float));
+
+        // Y = rgb2Y(data)
+        // Y = Y - 128.f
 		// Cb = rgb2Cb(data)
 		// Cr = rgb2Cr(data)
-		// cudaDeviceSynchronize
-		// n = number of 8x8 blocks in Y
+        // cudaDeviceSynchronize
+        
+        // if multithreaded. If we are facing memory limitations then we may need to do each channel separately
+        std::thread Y_thread (launchConversionKernel, pixels_cuda, n_datas, Y_cuda,  constants::Yonv  );
+        std::thread Cb_thread(launchConversionKernel, pixels_cuda, n_datas, Cb_cuda, constants::CbConv);
+        std::thread Cr_thread(launchConversionKernel, pixels_cuda, n_datas, Cr_cuda, constants::CrConv);
+        std::thread threads[3] = {Y_thread,Cb_thread,Cr_thread};
+        for(auto i = 0; i < 3; i++)
+            threads[i].join();
+        // else just launch the kernels one by one
+
+        // reshape each array into 8x8 blocks
+        // n = number of 8x8 blocks in Y
+        // return n
+        
 	}
 
 	/* 
