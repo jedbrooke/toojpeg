@@ -154,36 +154,55 @@ namespace // anonymous namespace for helper functions
     }
 
     __global__ 
-    void convertRGBtoY(const uint8_t* pixels, const int n, float* Y)
+    void convertRGBtoY(const uint8_t* pixels, const int n, const int width, const int height, float* Y)
     {
         auto const index = blockIdx.x * blockDim.x + threadIdx.x;
         auto const stride = blockDim.x * gridDim.x * 3; // 3 color components r,g,b
+        const auto width_padded  = (width  + (width  % 8 == 0 ? 0 : 8 - (width  % 8)))); 
+        const auto height_padded = (height + (height % 8 == 0 ? 0 : 8 - (height % 8)));
         for(auto i = index; i < n; i += stride)
         {
-            Y[i] = +0.299f * pixels[i + 0] + 0.587f * pixels[i + 1] + 0.114f * pixels[i + 2];
+            // find x and y, if x >= width x=width - 1, if y >= height y = height - 1
+            const auto x = (i % width_padded)  >= width  ? width  - 1 : (i % width_padded );
+            const auto y = (i / height_padded) >= height ? height - 1 : (i / height_padded);
+            const auto pos = y*width + x;
+            Y[i] = +0.299f * pixels[pos + 0] + 0.587f * pixels[pos + 1] + 0.114f * pixels[pos + 2];
             Y[i] =- 128.f;
         } 
     }
 
     __global__ 
-    void convertRGBtoCb(const uint8_t* pixels, const int n, float* Cb)
+    void convertRGBtoCb(const uint8_t* pixels, const int n, const int width, const int height, float* Cb)
     {
         auto const index = blockIdx.x * blockDim.x + threadIdx.x;
         auto const stride = blockDim.x * gridDim.x * 3; // 3 color components r,g,b
+        const auto width_padded  = (width  + (width  % 8 == 0 ? 0 : 8 - (width  % 8)))); 
+        const auto height_padded = (height + (height % 8 == 0 ? 0 : 8 - (height % 8)));
         for(auto i = index; i < n; i += stride)
         {
-            Cb[i] = -0.16874f * pixels[i + 0] - 0.33126f * pixels[i + 1] + 0.5f * pixels[i + 2];
+            // find x and y, if x >= width x=width - 1, if y >= height y = height - 1
+            const auto x = (i % width_padded)  >= width  ? width  - 1 : (i % width_padded );
+            const auto y = (i / height_padded) >= height ? height - 1 : (i / height_padded);
+            const auto pos = y*width + x;
+            Cb[i] = -0.16874f * pixels[pos + 0] - 0.33126f * pixels[pos + 1] + 0.5f * pixels[pos + 2]; 
         } 
     }
 
     __global__ 
-    void convertRGBtoCr(const uint8_t* pixels, const int n, float* Cr)
+    void convertRGBtoCr(const uint8_t* pixels, const int n, const int width, const int height, float* Cr)
     {
         auto const index = blockIdx.x * blockDim.x + threadIdx.x;
         auto const stride = blockDim.x * gridDim.x * 3; // 3 color components r,g,b
+        const auto width_padded  = (width  + (width  % 8 == 0 ? 0 : 8 - (width  % 8)))); 
+        const auto height_padded = (height + (height % 8 == 0 ? 0 : 8 - (height % 8)));
         for(auto i = index; i < n; i += stride)
         {
-            Cr[i] = +0.5f * pixels[i + 0] - 0.41869f * pixels[i + 1] +0.5f * pixels[i + 2];
+            // find x and y, if x >= width x=width - 1, if y >= height y = height - 1
+            const auto x = (i % width_padded)  >= width  ? width  - 1 : (i % width_padded );
+            const auto y = (i / height_padded) >= height ? height - 1 : (i / height_padded);
+            const auto pos = y*width + x;
+            Cr[i] = +0.5f * pixels[pos + 0] - 0.41869f * pixels[pos + 1] +0.5f * pixels[pos + 2];
+            // else set to 0 
         } 
     }
 
@@ -254,9 +273,9 @@ namespace gpu
         // cudaDeviceSynchronize
         
         // if multithreaded. If we are facing memory limitations then we may need to do each channel separately
-        std::thread Y_thread (launchConversionKernel, pixels_cuda, n_datas, Y_cuda,  constants::Yonv  );
-        std::thread Cb_thread(launchConversionKernel, pixels_cuda, n_datas, Cb_cuda, constants::CbConv);
-        std::thread Cr_thread(launchConversionKernel, pixels_cuda, n_datas, Cr_cuda, constants::CrConv);
+        std::thread Y_thread (launchConversionKernel, pixels_cuda, n_padded, Y_cuda,  constants::Yonv  );
+        std::thread Cb_thread(launchConversionKernel, pixels_cuda, n_padded, Cb_cuda, constants::CbConv);
+        std::thread Cr_thread(launchConversionKernel, pixels_cuda, n_padded, Cr_cuda, constants::CrConv);
         std::thread threads[3] = {Y_thread,Cb_thread,Cr_thread};
         for(auto i = 0; i < 3; i++)
             threads[i].join();
