@@ -202,17 +202,38 @@ namespace // anonymous namespace for helper functions
             const auto y = (i / height_padded) >= height ? height - 1 : (i / height_padded);
             const auto pos = y*width + x;
             Cr[i] = +0.5f * pixels[pos + 0] - 0.41869f * pixels[pos + 1] +0.5f * pixels[pos + 2];
-            // else set to 0 
         } 
     }
 
     __global__
     void reshape_data_to_blocks(float* data, const int width, const int height)
     {
-        
+        // process image 8 pixel rows at a time across all columns
+        // memcpy chuck of 8 rows into temp array
+        // async memcpy it back into source pointer
+        auto const index = blockIdx.x * blockDim.x + threadIdx.x;
+        auto const stride = blockDim.x * gridDim.x * 8; // copy 8 rows at a time
+        const auto strip_size = width * 8 * sizeof(float);
+        float* temp;
+        cudaMalloc(temp,strip_size); // allocate enough for 8 rows
+        for(auto i = index; i < height; i += stride) // for all the rows
+        {
+            float* const strip_ptr = &data[i * width]; // constant pointer to the current strip
+            cudaMemcpy(temp,strip_ptr,strip_size,cudaMemcpyDeviceToDevice);
+            // for loops are evil >:(, but this one is with asyncs so I guess it's ok
+            for(auto b = 0; b < width / 8, b++) // for each 8x8 block in the strip
+            {
+                // double for loop! what are you trying to do to me man
+                for(auto l = 0; l < 8; l++) // for each line in that block
+                {
+                    cudaMemcpyAsync(&strip_ptr[b * constants::block_size + l],temp[l*8 + b * 8], 8 * sizeof(float), cudaMemcpyDeviceToDevice);
+                }
+            }
+        }
+        cudaFree(temp);
     }
 
-    void launchConversionKernel(const uint8_t* pixels, const int n, float* output, auto conversion)
+    void launchConversionKernel(const uint8_t* pixels, const int n, const int width, const int height, auto conversion, float* output)
     {
         // convert the color data
         auto const cu_blockSize = 256;
@@ -220,13 +241,13 @@ namespace // anonymous namespace for helper functions
         switch(conversion)
         {
             case constants::YConv:
-                convertRGBtoY<<<cu_numBlocks,cu_blockSize>>>(pixels,n,output);
+                convertRGBtoY<<<cu_numBlocks,cu_blockSize>>>(pixels,n,width,height,output);
                 break;
             case constants::CbConv:
-                convertRGBtoCb<<<cu_numBlocks,cu_blockSize>>>(pixels,n,output);
+                convertRGBtoCb<<<cu_numBlocks,cu_blockSize>>>(pixels,n,width,height,output);
                 break;
             case constants::CrConv:
-                convertRGBtoCr<<<cu_numBlocks,cu_blockSize>>>(pixels,n,output);
+                convertRGBtoCr<<<cu_numBlocks,cu_blockSize>>>(pixels,n,width,height,output);
         }
         cudaStreamSynchronize(0);
         // reshape the data in to 8x8 blocks
@@ -253,10 +274,11 @@ namespace gpu
         float* Cr_cuda;
 
 
-        auto n_datas = width * height * 3;
+        const auto n_datas = width * height * 3;
         // n = total num items (width*height) * 3
         // width and height are each rounded up to nearest multiple of 8 to prepare for converting data to 8x8 blocks
-        auto n_padded = (width + (width % 8 == 0 ? 0 : 8 - (width % 8))) * (height + (height % 8 == 0 ? 0 : 8 - (height % 8)));
+        
+        const auto n_padded = (width + (width % 8 == 0 ? 0 : 8 - (width % 8))) * (height + (height % 8 == 0 ? 0 : 8 - (height % 8)));
 
         // allocate all the memory on the GPU
         cudaMalloc(&pixels_cuda, n_datas * sizeof(uint8_t));
@@ -273,9 +295,9 @@ namespace gpu
         // cudaDeviceSynchronize
         
         // if multithreaded. If we are facing memory limitations then we may need to do each channel separately
-        std::thread Y_thread (launchConversionKernel, pixels_cuda, n_padded, Y_cuda,  constants::Yonv  );
-        std::thread Cb_thread(launchConversionKernel, pixels_cuda, n_padded, Cb_cuda, constants::CbConv);
-        std::thread Cr_thread(launchConversionKernel, pixels_cuda, n_padded, Cr_cuda, constants::CrConv);
+        std::thread Y_thread (launchConversionKernel, pixels_cuda, n_padded, width, height, constants::Yonv  , Y_cuda );
+        std::thread Cb_thread(launchConversionKernel, pixels_cuda, n_padded, width, height, constants::CbConv, Cb_cuda);
+        std::thread Cr_thread(launchConversionKernel, pixels_cuda, n_padded, width, height, constants::CrConv, Cr_cuda);
         std::thread threads[3] = {Y_thread,Cb_thread,Cr_thread};
         for(auto i = 0; i < 3; i++)
             threads[i].join();
