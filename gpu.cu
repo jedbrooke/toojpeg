@@ -249,9 +249,11 @@ namespace // anonymous namespace for helper functions
             case constants::CrConv:
                 convertRGBtoCr<<<cu_numBlocks,cu_blockSize>>>(pixels,n,width,height,output);
         }
+        
         cudaStreamSynchronize(0);
         // reshape the data in to 8x8 blocks
-
+        reshape_data_to_blocks<<<cu_numBlocks,cu_blockSize>>>(output,width,height);
+        cudaStreamSynchronize(0);
     }
 
 
@@ -277,7 +279,6 @@ namespace gpu
         const auto n_datas = width * height * 3;
         // n = total num items (width*height) * 3
         // width and height are each rounded up to nearest multiple of 8 to prepare for converting data to 8x8 blocks
-        
         const auto n_padded = (width + (width % 8 == 0 ? 0 : 8 - (width % 8))) * (height + (height % 8 == 0 ? 0 : 8 - (height % 8)));
 
         // allocate all the memory on the GPU
@@ -302,11 +303,19 @@ namespace gpu
         for(auto i = 0; i < 3; i++)
             threads[i].join();
         // else just launch the kernels one by one
+        
+        // copy data from cuda back to 
+        cudaMemcpyAsync(Y,  Y_cuda,  n_padded * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpyAsync(Cb, Cb_cuda, n_padded * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpyAsync(Cr, Cr_cuda, n_padded * sizeof(float), cudaMemcpyDeviceToHost);
 
-        // reshape each array into 8x8 blocks
+        // make sure everything is done
+        cudaDeviceSynchronize();
+
+
         // n = number of 8x8 blocks in Y
         // return n
-        
+        return n_padded / 64; // n_padded = width*height, divide each by 8 to get num blocks
 	}
 
 	/* 
