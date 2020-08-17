@@ -1,4 +1,5 @@
 #include <thread>
+#include <stdlib.h>
 #include "constants.h"
 
 namespace gpu
@@ -30,7 +31,7 @@ namespace gpu
 		data is (width * height) BW pixel values, 
 		Y is returned in data as n 8x8 blocks
 	*/
-	int convertBWtoY(uint8_t* data, const int width, const int height);
+	int convertBWtoY(uint8_t* data, const int width, const int height, float* Y);
 
     /* 
 		data is an aray of n 8*8 blocks

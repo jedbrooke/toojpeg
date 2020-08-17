@@ -17,7 +17,9 @@
 
 #pragma once
 #include <math.h>
+#include <thread>
 #include "constants.h"
+#include "gpu.h"
 
 namespace TooJpeg
 {

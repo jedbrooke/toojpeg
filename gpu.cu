@@ -123,7 +123,7 @@ namespace // anonymous namespace for helper functions
         int stride = blockDim.x * gridDim.x;
         for(int i = index; i < n * constants::block_size; i+= stride)
         {
-            quantized[i] = __float2int_rn(data[ZigZagInv_cuda[i]]);
+            quantized[i] = __float2int_rn(data[ZigZagInv_cuda[i] + (i / constants::block_size)]);
         }
     }
 
@@ -315,6 +315,11 @@ namespace gpu
             threads[i].join();
         // else just launch the kernels one by one
         
+        // make sure each array has enough allocated, since image may grow due to padding to 8x8 blocks
+        Y  = realloc(Y,  n_padded * sizeof(float));
+        Cb = realloc(Cb, n_padded * sizeof(float));
+        Cr = realloc(Cr, n_padded * sizeof(float));
+
         // copy data from cuda back to 
         cudaMemcpyAsync(Y,  Y_cuda,  n_padded * sizeof(float), cudaMemcpyDeviceToHost);
         cudaMemcpyAsync(Cb, Cb_cuda, n_padded * sizeof(float), cudaMemcpyDeviceToHost);
@@ -354,9 +359,10 @@ namespace gpu
 		data is (width * height) BW pixel values, 
 		Y is returned in data as n 8x8 blocks
 	*/
-	int convertBWtoY(uint8_t* data, const int width, const int height)
+	int convertBWtoY(uint8_t* data, const int width, const int height, float* Y)
 	{
-		// Y = pixel - 128.f but in CUDA
+        // Y = pixel - 128.f but in CUDA
+        // pad to 8x8 and reshape data
 		// int n = number of 8x8 blocks 
     }
     
@@ -403,11 +409,15 @@ namespace gpu
         int cu_numBlocks = (n / cu_blockSize) + 1
 
         find_posNonZero_many<<<cu_numBlocks,cu_blockSize>>>(quantized_cuda, n, posNonZeros_cuda);
+        
+        // prepare the destination pointers
+        quantized = realloc(quantized, n * constants::block_size * sizeof(int16_t));
+        posNonZeros = realloc(posNonZeros, n * sizeof(uint8_t));
         cudaDeviceSynchronize();
 
         // copy data back from the device to the cpu
-        cudaMemcpy(quantized,   quantized_cuda,   n * constants::block_size_mem, cudaMemcpyDeviceToHost);
-        cudaMemcpy(posNonZeros, posNonZeros_cuda, n * sizeof(uint8_t),           cudaMemcpyDeviceToHost);
+        cudaMemcpy(quantized,   quantized_cuda,   n * constants::block_size * sizeof(int16_t),  cudaMemcpyDeviceToHost);
+        cudaMemcpy(posNonZeros, posNonZeros_cuda, n * sizeof(uint8_t),                          cudaMemcpyDeviceToHost);
         
         cudaFree(new_scale);
         cudaFree(quantized_cuda);

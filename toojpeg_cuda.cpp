@@ -4,7 +4,7 @@
 // see https://create.stephan-brumme.com/toojpeg/
 //
 
-#include "toojpeg_modified.h"
+#include "toojpeg_cuda.h"
 
 // - the "official" specifications: https://www.w3.org/Graphics/JPEG/itu-t81.pdf and https://www.w3.org/Graphics/JPEG/jfif3.pdf
 // - Wikipedia has a short description of the JFIF/JPEG file format: https://en.wikipedia.org/wiki/JPEG_File_Interchange_Format
@@ -164,61 +164,112 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		return value;                           // value was inside interval, keep it
 	}
 
-	// convert from RGB to YCbCr, constants are similar to ITU-R, see https://en.wikipedia.org/wiki/YCbCr#JPEG_conversion
-	float rgb2y (float r, float g, float b) { return +0.299f   * r +0.587f   * g +0.114f   * b; }
-	float rgb2cb(float r, float g, float b) { return -0.16874f * r -0.33126f * g +0.5f     * b; }
-	float rgb2cr(float r, float g, float b) { return +0.5f     * r -0.41869f * g -0.08131f * b; }
-
-	/* 
-		placeholder for GPU accelerated version
-	*/
-	void transformBlock(float block[8][8], const float scaled[8*8], int16_t quantized[8*8])
+	void generate_quantization_tables(unsigned char quality_,
+									  float* LumScale, float* ChromScale)
 	{
-		/* 
-			STEP 1: DCT
-			Paralellizability: strong (matmul)
-			Status: done, needs implementing
-		*/
-		/* gpu accelerated 8x8 DCT function */
-		DCT_8x8(block);
-
-		// "linearize" the 8x8 block, treat it as a flat array of 64 floats
-		auto block64 = (float*) block;
-		
-
-		/* 
-			Step 2: Scale
-			Paralellizability: Strong (for loop)
-			Status: not done
-		*/
-		for (auto i = 0; i < 8*8; i++)
-			block64[i] *= scaled[i];
+		// quality level must be in 1 ... 100
+		auto quality = clamp<uint16_t>(quality_, 1, 100);
+		// convert to an internal JPEG quality factor, formula taken from libjpeg
+		quality = quality < 50 ? 5000 / quality : 200 - quality * 2;
 
 
-		// quantize and zigzag the other 63 coefficients
-		auto posNonZero = 0; // find last coefficient which is not zero (because trailing zeros are encoded differently)
-		/* 
-			Step 3: Quantization
-			Paralellizability: Strong (double for loop)
-			Status: not done
-		*/
-
+		/* Probably not worth paralellizing this step since it's only 64 loops */
+		uint8_t quantLuminance  [8*8];
+		uint8_t quantChrominance[8*8];
 		for (auto i = 0; i < 8*8; i++)
 		{
-			auto value = block64[ZigZagInv[i]];
-			// round to nearest integer
-			quantized[i] = int(value + (value >= 0 ? +0.5f : -0.5f)); // C++11's nearbyint() achieves a similar effect
-			// remember offset of last non-zero coefficient
-			if (quantized[i] != 0)
-				posNonZero = i;
+			int luminance   = (constants::DefaultQuantLuminance  [constants::ZigZagInv[i]] * quality + 50) / 100;
+			int chrominance = (constants::DefaultQuantChrominance[constants::ZigZagInv[i]] * quality + 50) / 100;
+
+			// clamp to 1..255
+			quantLuminance  [i] = clamp(luminance,   1, 255);
+			quantChrominance[i] = clamp(chrominance, 1, 255);
+		}
+
+		// adjust quantization tables with AAN scaling factors to simplify DCT
+		float scaledLuminance  [8*8];
+		float scaledChrominance[8*8];
+		for (auto i = 0; i < 8*8; i++)
+		{
+			auto row    = constants::ZigZagInv[i] / 8; // same as ZigZagInv[i] >> 3
+			auto column = constants::ZigZagInv[i] % 8; // same as ZigZagInv[i] &  7
+
+			// scaling constants for AAN DCT algorithm: AanScaleFactors[0] = 1, AanScaleFactors[k=1..7] = cos(k*PI/16) * sqrt(2)
+			static const float AanScaleFactors[8] = { 1, 1.387039845f, 1.306562965f, 1.175875602f, 1, 0.785694958f, 0.541196100f, 0.275899379f };
+			auto factor = 1 / (AanScaleFactors[row] * AanScaleFactors[column] * 8);
+			scaledLuminance  [constants::ZigZagInv[i]] = factor / quantLuminance  [i];
+			scaledChrominance[constants::ZigZagInv[i]] = factor / quantChrominance[i];
+			// if you really want JPEGs that are bitwise identical to Jon Olick's code then you need slightly different formulas (note: sqrt(8) = 2.828427125f)
+			//static const float aasf[] = { 1.0f * 2.828427125f, 1.387039845f * 2.828427125f, 1.306562965f * 2.828427125f, 1.175875602f * 2.828427125f, 1.0f * 2.828427125f, 0.785694958f * 2.828427125f, 0.541196100f * 2.828427125f, 0.275899379f * 2.828427125f }; // line 240 of jo_jpeg.cpp
+			//scaledLuminance  [ZigZagInv[i]] = 1 / (quantLuminance  [i] * aasf[row] * aasf[column]); // lines 266-267 of jo_jpeg.cpp
+			//scaledChrominance[ZigZagInv[i]] = 1 / (quantChrominance[i] * aasf[row] * aasf[column]);
 		}
 	}
+	/* 
+		inputs are the image data, width, height, color information, and whether to downsample or not, and quantization tables for Y and Cb/Cr
+		outputs are quantized data, and position of the last nonzero element in each block
+	*/
 
+	int process_pixels(uint8_t* data, const int width, const int height, const bool isRGB, const bool downsample, const float* LumScale, const float* ChromScale,
+						uint8_t* posNonZeroY, uint8_t* posNonZeroCb, uint8_t* posNonZeroCr,
+						int16_t* quantY, int16_t* quantCb, int16_t* quantCr) 
+	{
+		// initialize gpu constants in VRAM
+		gpu::initializeDevice();
+		// prepare DCT scale matrix while converting RGB to YCbCr
+		float* LumScaleDCT   = new float[constants::block_size];
+		float* ChromScaleDCT = new float[constants::block_size];
+		std::thread prep_blocks([LumScale,LumScaleDCT,ChromScale,ChromScaleDCT]()
+		{
+			for(auto i = 0; i < constants::block_size; i++)
+			{
+				LumScaleDCT[i]   = LumScale[i]   * constants::dct_correction_matrix[i];
+				ChromScaleDCT[i] = ChromScale[i] * constants::dct_correction_matrix[i];
+			}
+		});
+		// convert image data 
+		float* Y, *Cb, *Cr;
+		int num_blocks;
+		if(isRGB) {	
+			if(downsample) {
+				num_blocks = gpu::convertRGBtoYCbCr420(data,width,height,Y,Cb,Cr);
+			} else {
+				num_blocks = gpu::convertRGBtoYCbCr444(data,width,height,Y,Cb,Cr);
+			}
+		} else {
+			num_blocks = gpu::convertBWtoY(data,width,height,Y);
+			delete Cb;
+			delete Cr;
+		}
+
+		// wait for the prep blocks thread to finish, we will need the blocks ready for the DCT
+		prep_blocks.join();
+		
+		gpu::transformBlock_many(Y, LumScaleDCT, num_blocks, posNonZeroY, quantY);
+
+		if(isRGB) { //if image is RGB process chroma too
+			// possibly run in parallel? 
+			gpu::transformBlock_many(Cb, ChromScaleDCT, num_blocks / (downsample ? 4 : 1), posNonZeroCb, quantCb);
+			gpu::transformBlock_many(Cr, ChromScaleDCT, num_blocks / (downsample ? 4 : 1), posNonZeroCr, quantCr);
+		}
+		// blocks are all processed, we are now ready for writing
+		
+		// memory cleanup
+		delete[] Y;
+		if(isRGB) {
+			delete[] Cb;
+			delete[] Cr;
+		}
+		delete[] LumScaleDCT;
+		delete[] ChromScaleDCT;
+
+		return num_blocks;
+	}
 
 	/* 
 		writes and huffman encodes the block
 	*/
-	int16_t writeBlock(BitWriter& writer, float block[8][8],int16_t lastDC,
+	int16_t writeBlock(BitWriter& writer, int16_t* block, int16_t lastDC,
 		const BitCode huffmanDC[256], const BitCode huffmanAC[256], const BitCode* codewords, int posNonZero)
 	{
 		auto block64 = (float*) block;
@@ -365,24 +416,7 @@ namespace TooJpeg
 		// ////////////////////////////////////////
 		// adjust quantization tables to desired quality
 
-		// quality level must be in 1 ... 100
-		auto quality = clamp<uint16_t>(quality_, 1, 100);
-		// convert to an internal JPEG quality factor, formula taken from libjpeg
-		quality = quality < 50 ? 5000 / quality : 200 - quality * 2;
-
-
-		/* Probably not worth paralellizing this step since it's only 64 loops */
-		uint8_t quantLuminance  [8*8];
-		uint8_t quantChrominance[8*8];
-		for (auto i = 0; i < 8*8; i++)
-		{
-			int luminance   = (constants::DefaultQuantLuminance  [constants::ZigZagInv[i]] * quality + 50) / 100;
-			int chrominance = (constants::DefaultQuantChrominance[constants::ZigZagInv[i]] * quality + 50) / 100;
-
-			// clamp to 1..255
-			quantLuminance  [i] = clamp(luminance,   1, 255);
-			quantChrominance[i] = clamp(chrominance, 1, 255);
-		}
+		
 
 		// write quantization tables
 		bitWriter.addMarker(0xDB, 2 + (isRGB ? 2 : 1) * (1 + 8*8)); // length: 65 bytes per table + 2 bytes for this length field
@@ -467,25 +501,6 @@ namespace TooJpeg
 		static const uint8_t Spectral[3] = { 0, 63, 0 }; // spectral selection: must be from 0 to 63; successive approximation must be 0
 		bitWriter << Spectral;
 
-		// ////////////////////////////////////////
-		// adjust quantization tables with AAN scaling factors to simplify DCT
-		float scaledLuminance  [8*8];
-		float scaledChrominance[8*8];
-		for (auto i = 0; i < 8*8; i++)
-		{
-			auto row    = constants::ZigZagInv[i] / 8; // same as ZigZagInv[i] >> 3
-			auto column = constants::ZigZagInv[i] % 8; // same as ZigZagInv[i] &  7
-
-			// scaling constants for AAN DCT algorithm: AanScaleFactors[0] = 1, AanScaleFactors[k=1..7] = cos(k*PI/16) * sqrt(2)
-			static const float AanScaleFactors[8] = { 1, 1.387039845f, 1.306562965f, 1.175875602f, 1, 0.785694958f, 0.541196100f, 0.275899379f };
-			auto factor = 1 / (AanScaleFactors[row] * AanScaleFactors[column] * 8);
-			scaledLuminance  [constants::ZigZagInv[i]] = factor / quantLuminance  [i];
-			scaledChrominance[constants::ZigZagInv[i]] = factor / quantChrominance[i];
-			// if you really want JPEGs that are bitwise identical to Jon Olick's code then you need slightly different formulas (note: sqrt(8) = 2.828427125f)
-			//static const float aasf[] = { 1.0f * 2.828427125f, 1.387039845f * 2.828427125f, 1.306562965f * 2.828427125f, 1.175875602f * 2.828427125f, 1.0f * 2.828427125f, 0.785694958f * 2.828427125f, 0.541196100f * 2.828427125f, 0.275899379f * 2.828427125f }; // line 240 of jo_jpeg.cpp
-			//scaledLuminance  [ZigZagInv[i]] = 1 / (quantLuminance  [i] * aasf[row] * aasf[column]); // lines 266-267 of jo_jpeg.cpp
-			//scaledChrominance[ZigZagInv[i]] = 1 / (quantChrominance[i] * aasf[row] * aasf[column]);
-		}
 
 		// ////////////////////////////////////////
 		// precompute JPEG codewords for quantized DCT
@@ -539,108 +554,7 @@ namespace TooJpeg
 		*/
 
 
-		// average color of the previous MCU
-		int16_t lastYDC = 0, lastCbDC = 0, lastCrDC = 0;
-		// convert from RGB to YCbCr
-		float Y[8][8], Cb[8][8], Cr[8][8];
-		for (auto mcuY = 0; mcuY < height; mcuY += mcuSize) // each step is either 8 or 16 (=mcuSize)
-		for (auto mcuX = 0; mcuX < width; mcuX += mcuSize)
-		{
-			// YCbCr 4:4:4 format: each MCU is a 8x8 block - the same applies to grayscale images, too
-			// YCbCr 4:2:0 format: each MCU represents a 16x16 block, stored as 4x 8x8 Y-blocks plus 1x 8x8 Cb and 1x 8x8 Cr block)
-			for (auto blockY = 0; blockY < mcuSize; blockY += 8) // iterate once (YCbCr444 and grayscale) or twice (YCbCr420)
-			for (auto blockX = 0; blockX < mcuSize; blockX += 8)
-			{
-				// now we finally have an 8x8 block ...
-				for (auto deltaY = 0; deltaY < 8; deltaY++)
-				{
-					auto column = minimum(mcuX + blockX         , maxWidth); // must not exceed image borders, replicate last row/column if needed
-					auto row    = minimum(mcuY + blockY + deltaY, maxHeight);
-					for (auto deltaX = 0; deltaX < 8; deltaX++)
-					{
-						// find actual pixel position within the current image
-						auto pixelPos = row * int(width) + column; // the cast ensures that we don't run into multiplication overflows
-						if (column < maxWidth)
-							column++;
 
-						// grayscale images have solely a Y channel which can be easily derived from the input pixel by shifting it by 128
-						if (!isRGB)
-						{
-							Y[deltaY][deltaX] = pixels[pixelPos] - 128.f;
-							continue;
-						}
-
-						// RGB: 3 bytes per pixel (whereas grayscale images have only 1 byte per pixel)
-						auto r = pixels[3 * pixelPos    ];
-						auto g = pixels[3 * pixelPos + 1];
-						auto b = pixels[3 * pixelPos + 2];
-
-						Y   [deltaY][deltaX] = rgb2y (r, g, b) - 128; // again, the JPEG standard requires Y to be shifted by 128
-						// YCbCr444 is easy - the more complex YCbCr420 has to be computed about 20 lines below in a second pass
-						if (!downsample)
-						{
-							Cb[deltaY][deltaX] = rgb2cb(r, g, b); // standard RGB-to-YCbCr conversion
-							Cr[deltaY][deltaX] = rgb2cr(r, g, b);
-						}
-					}
-				}
-
-				// encode Y channel
-				lastYDC = encodeBlock(bitWriter, Y, scaledLuminance, lastYDC, huffmanLuminanceDC, huffmanLuminanceAC, codewords);
-				// Cb and Cr are encoded about 50 lines below
-			}
-
-			// grayscale images don't need any Cb and Cr information
-			if (!isRGB)
-				continue;
-
-			// ////////////////////////////////////////
-			// the following lines are only relevant for YCbCr420:
-			// average/downsample chrominance of four pixels while respecting the image borders
-			if (downsample)
-				for (short deltaY = 7; downsample && deltaY >= 0; deltaY--) // iterating loop in reverse increases cache read efficiency
-				{
-					auto row      = minimum(mcuY + 2*deltaY, maxHeight); // each deltaX/Y step covers a 2x2 area
-					auto column   =         mcuX;                        // column is updated inside next loop
-					auto pixelPos = (row * int(width) + column) * 3;     // numComponents = 3
-
-					// deltas (in bytes) to next row / column, must not exceed image borders
-					auto rowStep    = (row    < maxHeight) ? 3 * int(width) : 0; // always numComponents*width except for bottom    line
-					auto columnStep = (column < maxWidth ) ? 3              : 0; // always numComponents       except for rightmost pixel
-
-					for (short deltaX = 0; deltaX < 8; deltaX++)
-					{
-						// let's add all four samples (2x2 area)
-						auto right     = pixelPos + columnStep;
-						auto down      = pixelPos +              rowStep;
-						auto downRight = pixelPos + columnStep + rowStep;
-
-						// note: cast from 8 bits to >8 bits to avoid overflows when adding
-						auto r = short(pixels[pixelPos    ]) + pixels[right    ] + pixels[down    ] + pixels[downRight    ];
-						auto g = short(pixels[pixelPos + 1]) + pixels[right + 1] + pixels[down + 1] + pixels[downRight + 1];
-						auto b = short(pixels[pixelPos + 2]) + pixels[right + 2] + pixels[down + 2] + pixels[downRight + 2];
-
-						// convert to Cb and Cr
-						Cb[deltaY][deltaX] = rgb2cb(r, g, b) / 4; // I still have to divide r,g,b by 4 to get their average values
-						Cr[deltaY][deltaX] = rgb2cr(r, g, b) / 4; // it's a bit faster if done AFTER CbCr conversion
-
-						// step forward to next 2x2 area
-						pixelPos += 2*3; // 2 pixels => 6 bytes (2*numComponents)
-						column   += 2;
-
-						// reached right border ?
-						if (column >= maxWidth)
-						{
-							columnStep = 0;
-							pixelPos = ((row + 1) * int(width) - 1) * 3; // same as (row * width + maxWidth) * numComponents => current's row last pixel
-						}
-					}
-				} // end of YCbCr420 code for Cb and Cr
-
-			// encode Cb and Cr
-			lastCbDC = encodeBlock(bitWriter, Cb, scaledChrominance, lastCbDC, huffmanChrominanceDC, huffmanChrominanceAC, codewords);
-			lastCrDC = encodeBlock(bitWriter, Cr, scaledChrominance, lastCrDC, huffmanChrominanceDC, huffmanChrominanceAC, codewords);
-		}
 
 		bitWriter.flush(); // now image is completely encoded, write any bits still left in the buffer
 
