@@ -16,6 +16,7 @@ namespace // anonymous namespace for helper functions
         cudaMemcpy(dct_matrix_cuda,           constants::dct_matrix,           constants::block_size_mem, cudaMemcpyHostToDevice);
         cudaMemcpy(dct_matrix_transpose_cuda, constants::dct_matrix_transpose, constants::block_size_mem, cudaMemcpyHostToDevice);
         cudaMemcpy(ZigZagInv_cuda,            constants::ZigZagInv,            constants::block_size_mem, cudaMemcpyHostToDevice);
+        isTransformConstsLoaded = true;
     }
 
     void unloadTransformConstants()
@@ -261,6 +262,16 @@ namespace // anonymous namespace for helper functions
 
 namespace gpu
 {
+    
+    void initializeDevice()
+    {
+        loadTransformConstants();
+    }
+    void retireDevice()
+    {
+        unloadTransformConstants();
+        isTransformConstsLoaded = false;
+    }
     /* 
 		data is (width * height) * 3
 		data[i] = r, data[i + 1] = g, data[i + 2] = b
@@ -312,6 +323,11 @@ namespace gpu
         // make sure everything is done
         cudaDeviceSynchronize();
 
+        // free the memory
+        cudaFree(pixels_cuda);
+        cudaFree(Y_cuda);
+        cudaFree(Cb_cuda);
+        cudaFree(Cr_cuda);
 
         // n = number of 8x8 blocks in Y
         // return n
