@@ -29,8 +29,6 @@ namespace // anonymous namespace for helper functions
     __global__
     void elementwise_mult_8x8_multi(const float* K, float* A)
     {   
-        if (KERNEL_LOOP_DEBUG)
-            printf("performing elementwise_mult");
         int index = blockIdx.x * blockDim.x + threadIdx.x;
         int stride = blockDim.x * gridDim.x;
         for (int c = index; c < N_DATA * 8*8; c+= stride)
@@ -47,8 +45,6 @@ namespace // anonymous namespace for helper functions
     {
         for (int k = 0; k < 8; k++){
             C[n*64 + i*8 + j] += A[i*8 + k] * B[n*64 + k*8 + j];
-            if (KERNEL_LOOP_DEBUG)
-                printf("C[%u][%u][%u] += A[%u][%u] * B[%u][%u][%u]\n",n,i,j,i,k,n,i,k);
         }
     }
 
