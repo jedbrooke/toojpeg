@@ -119,7 +119,7 @@ namespace // anonymous namespace for helper functions
         int stride = blockDim.x * gridDim.x;
         for(int i = index; i < n * constants::block_size; i+= stride)
         {
-            quantized[i] = __float2int_rn(data[ZigZagInv_cuda[i] + (i / constants::block_size)]);
+            quantized[i] = __float2int_rn(data[(i / constants::block_size) + ZigZagInv_cuda[i % constant::block_size]]);
         }
     }
 
