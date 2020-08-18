@@ -274,7 +274,7 @@ namespace gpu
 		Y is stored as (width/8 * height/8) * (8x8 Y block)
 		etc for Cb, Cr
 	*/
-	int convertRGBtoYCbCr444(uint8_t* data, const int width, const int height, float* Y, float* Cb, float* Cr)
+	int convertRGBtoYCbCr444(const uint8_t* data, const int width, const int height, float* Y, float* Cb, float* Cr)
 	{
         // prepare memory
         uint8_t* pixels_cuda;
@@ -339,7 +339,7 @@ namespace gpu
 		Y is stored as (width/8 * height/8) * (8x8 Y block)
 		Cb/Cr is stored as (width/16 * height/16) * (1 Cb 8x8 block / 1 Cr 8x8 block)
 	*/
-	int convertRGBtoYCbCr420(uint8_t* data, const int width, const int height, float* Y, float* Cb, float* Cr)
+	int convertRGBtoYCbCr420(const uint8_t* data, const int width, const int height, float* Y, float* Cb, float* Cr)
 	{
 		// Y = rgb2Y(data)
 			// Y = Y - 128.f, probably in the same kernel so we dont need a deviceSynchronize
@@ -355,7 +355,7 @@ namespace gpu
 		data is (width * height) BW pixel values, 
 		Y is returned in data as n 8x8 blocks
 	*/
-	int convertBWtoY(uint8_t* data, const int width, const int height, float* Y)
+	int convertBWtoY(const uint8_t* data, const int width, const int height, float* Y)
 	{
         // Y = pixel - 128.f but in CUDA
         // pad to 8x8 and reshape data
