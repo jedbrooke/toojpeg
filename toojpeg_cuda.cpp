@@ -145,6 +145,17 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		}
 	};
 
+	struct HeaderTables
+	{
+		uint8_t quantLuminance[8*8];
+		uint8_t quantChrominance[8*8];
+		BitCode huffmanLuminanceDC[256];
+		BitCode huffmanLuminanceAC[256];
+		BitCode huffmanChrominanceDC[256];
+		BitCode huffmanChrominanceAC[256];
+		BitCode codewords[2 * CodeWordLimit];
+	};
+
 	// ////////////////////////////////////////
 	// functions / templates
 
