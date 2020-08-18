@@ -1,16 +1,17 @@
 CC=g++
-CFLAGS= --std=c++11 -I.
+CFLAGS= --std=c++11 -I. -lcudart -pthread
 
 all: example
 
-example: toojpeg_cuda.o
+example: toojpeg_cuda.o examples/example.cpp
+	$(CC) -o examples/example_cuda examples/example.cpp toojpeg_cuda.o gpu.o $(CFLAGS)
 
 
 toojpeg_cuda.o: gpu.o toojpeg_cuda.cpp
-	$(CC) -o toojpeg_cuda.o toojpeg_cuda.cpp $(CFLAGS)
+	$(CC) -c -o toojpeg_cuda.o toojpeg_cuda.cpp $(CFLAGS) gpu.o
 
 gpu.o: gpu.cu
-	nvcc -c --default-stream per-thread -Xcompiler "$(CFLAGS)" gpu.cu -o gpu.o 
+	nvcc -c --default-stream per-thread -arch=sm_35 -Xcompiler "$(CFLAGS)" gpu.cu -o gpu.o  
 
 clean:
 	rm -f toojpeg_cuda.o gpu.o

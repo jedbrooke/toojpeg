@@ -3,14 +3,14 @@
 // see https://create.stephan-brumme.com/toojpeg/
 // compile: g++ example.cpp toojpeg.cpp -o example -std=c++11
 
-#include "../toojpeg.h"
+#include "../toojpeg_cuda.h"
 
 // //////////////////////////////////////////////////////////
 // use a C++ file stream
 #include <fstream>
 
 // output file
-std::ofstream myFile("example_modified.jpg", std::ios_base::out | std::ios_base::binary);
+std::ofstream myFile("example_cuda.jpg", std::ios_base::out | std::ios_base::binary);
 
 // write a single byte compressed by tooJpeg
 void myOutput(unsigned char byte)
@@ -49,7 +49,7 @@ int main()
   const bool isRGB      = true;  // true = RGB image, else false = grayscale
   const auto quality    = 90;    // compression quality: 0 = worst, 100 = best, 80 to 90 are most often used
   const bool downsample = false; // false = save as YCbCr444 JPEG (better quality), true = YCbCr420 (smaller file)
-  const char* comment = "TooJpeg example image"; // arbitrary JPEG comment
+  const char* comment = "TooJpeg example image, now with CUDA"; // arbitrary JPEG comment
   auto ok = TooJpeg::writeJpeg(myOutput, image, width, height, isRGB, quality, downsample, comment);
 
   delete[] image;

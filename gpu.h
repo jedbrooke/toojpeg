@@ -1,5 +1,7 @@
 #include <thread>
 #include <stdlib.h>
+
+#pragma once
 #include "constants.h"
 
 namespace gpu

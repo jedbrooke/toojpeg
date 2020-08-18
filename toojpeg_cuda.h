@@ -15,11 +15,9 @@
 // => let's go !
 // TooJpeg::writeJpeg(myOutput, mypixels, 1024, 768);
 
-#pragma once
 #include <math.h>
 #include <thread>
 #include <string.h>
-#include "constants.h"
 #include "gpu.h"
 
 namespace TooJpeg

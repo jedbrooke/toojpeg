@@ -217,9 +217,11 @@ namespace // anonymous namespace for helper functions
             float* const strip_ptr = &data[i * width]; // constant pointer to the current strip
             memcpy(temp,strip_ptr,strip_size);
             // for loops are evil >:(, but this one is with asyncs so I guess it's ok
+#pragma unroll
             for(uint32_t b = 0; b < width / 8; b++) // for each 8x8 block in the strip
             {
                 // double for loop! what are you trying to do to me man
+#pragma unroll
                 for(uint8_t l = 0; l < 8; l++) // for each line in that block
                 {
                     memcpy(&strip_ptr[b * constants::block_size + l],&temp[l*8 + b * 8], 8 * sizeof(float));
