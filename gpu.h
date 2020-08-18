@@ -40,5 +40,5 @@ namespace gpu
 		n is the number of blocks
 		quantized is the quantized result of the transformation
 	*/
-	void transformBlock_many(float* const data, const float* const scale, const uint32_t n, uint8_t* posNonZero, int16_t* quantized);
+	void transformBlock_many(const float* data, const float* scale, const uint32_t n, uint8_t* posNonZero, int16_t* quantized);
 }

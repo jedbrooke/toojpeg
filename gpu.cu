@@ -5,7 +5,7 @@ namespace // anonymous namespace for helper functions
     bool isTransformConstsLoaded = false;
     float* dct_matrix_cuda;
     float* dct_matrix_transpose_cuda;
-    float* ZigZagInv_cuda;
+    uint8_t* ZigZagInv_cuda;
     
     void loadTransformConstants() // could maybe return the cuda error value if you want to do some quick exception handling
     {   
@@ -13,9 +13,9 @@ namespace // anonymous namespace for helper functions
         cudaMalloc(&dct_matrix_transpose_cuda, constants::block_size_mem);
         cudaMalloc(&ZigZagInv_cuda,            constants::block_size_mem);
         
-        cudaMemcpy(dct_matrix_cuda,           constants::dct_matrix,           constants::block_size_mem, cudaMemcpyHostToDevice);
-        cudaMemcpy(dct_matrix_transpose_cuda, constants::dct_matrix_transpose, constants::block_size_mem, cudaMemcpyHostToDevice);
-        cudaMemcpy(ZigZagInv_cuda,            constants::ZigZagInv,            constants::block_size_mem, cudaMemcpyHostToDevice);
+        cudaMemcpy(dct_matrix_cuda,           constants::dct_matrix,           constants::block_size_mem,               cudaMemcpyHostToDevice);
+        cudaMemcpy(dct_matrix_transpose_cuda, constants::dct_matrix_transpose, constants::block_size_mem,               cudaMemcpyHostToDevice);
+        cudaMemcpy(ZigZagInv_cuda,            constants::ZigZagInv,            constants::block_size * sizeof(uint8_t), cudaMemcpyHostToDevice);
         isTransformConstsLoaded = true;
     }
 
@@ -27,11 +27,11 @@ namespace // anonymous namespace for helper functions
     }
 
     __global__
-    void elementwise_mult_8x8_multi(const float* K, float* A)
+    void elementwise_mult_8x8_multi(const float* K, float* A, const uint32_t n)
     {   
         int index = blockIdx.x * blockDim.x + threadIdx.x;
         int stride = blockDim.x * gridDim.x;
-        for (int c = index; c < N_DATA * 8*8; c+= stride)
+        for (int c = index; c < n * 8*8; c+= stride)
         {
             A[c] = K[c % 64] * A[c];
         }
@@ -84,22 +84,22 @@ namespace // anonymous namespace for helper functions
         scale is a 8x8 block for the elementwise scale at the end
         output is returned in data
     */
-    void DCT8x8_many(float* data, const uint32_t n, float* scale)
+    void DCT8x8_many(float* data, const uint32_t n, const float* scale)
     {
         float* temp;
         cudaMalloc(&temp,n * constants::block_size_mem);
-        cudaMemset(temp,0,array_size);
+        cudaMemset(temp,0,n * constants::block_size_mem);
 
-        matmul_8x8_multi_step1<<<n,constants::block_size>>>(dct_matrix,data,temp,n);
+        matmul_8x8_multi_step1<<<n,constants::block_size>>>(constants::dct_matrix,data,temp,n);
 
         cudaDeviceSynchronize();
         cudaMemset(data,0,n * constants::block_size_mem);
 
-        matmul_8x8_multi_step2<<<n,constants::block_size>>>(temp,dct_matrix_transpose,data);
+        matmul_8x8_multi_step2<<<n,constants::block_size>>>(temp,constants::dct_matrix_transpose,data,n);
 
         cudaDeviceSynchronize();
 
-        elementwise_mult_8x8_multi<<<n,constants::block_size>>>(scale,data);
+        elementwise_mult_8x8_multi<<<n,constants::block_size>>>(scale,data,n);
 
         cudaDeviceSynchronize();
         
@@ -113,13 +113,13 @@ namespace // anonymous namespace for helper functions
         this needs to be zigzagged
     */
     __global__
-    void quantize_many(const float* data, const int n, int16_t* quantized)
+    void quantize_many(const float* data, const int n, uint8_t* ZigZagInv, int16_t* quantized)
     {
         int index = blockIdx.x * blockDim.x + threadIdx.x;
         int stride = blockDim.x * gridDim.x;
         for(int i = index; i < n * constants::block_size; i+= stride)
         {
-            quantized[i] = __float2int_rn(data[(i / constants::block_size) + ZigZagInv_cuda[i % constant::block_size]]);
+            quantized[i] = __float2int_rn(data[(i / constants::block_size) + ZigZagInv[i % constants::block_size]]);
         }
     }
 
@@ -131,19 +131,19 @@ namespace // anonymous namespace for helper functions
 
     */
     __global__
-    void find_posNonZero_many(const int16_t* quantized, const uint32_t n, uint8_t* posNonZeros)
+    void find_posNonZero_many(const int16_t* quantized, const uint32_t n, uint8_t* posNonZero)
     {
         int index = blockIdx.x * blockDim.x + threadIdx.x;
         int stride = blockDim.x * gridDim.x;
         for(auto c = index; c < n; c+= stride)
         {
-            int16_t* block = &quantized[c * constants::block_size];
+            const int16_t* block = &quantized[c * constants::block_size];
             // for loops are evil >:(
             for(auto i = constants::block_size - 1; i >= 0; i--) // go bakcwards until we find a non-zero, then we can end the loop
             {
                 if (block[i] == 0)
                 {
-                    posNonZeros[c] = i;
+                    posNonZero[c] = i;
                     break;
                 }
             }
@@ -155,7 +155,7 @@ namespace // anonymous namespace for helper functions
     {
         auto const index = blockIdx.x * blockDim.x + threadIdx.x;
         auto const stride = blockDim.x * gridDim.x * 3; // 3 color components r,g,b
-        const auto width_padded  = (width  + (width  % 8 == 0 ? 0 : 8 - (width  % 8)))); 
+        const auto width_padded  = (width  + (width  % 8 == 0 ? 0 : 8 - (width  % 8))); 
         const auto height_padded = (height + (height % 8 == 0 ? 0 : 8 - (height % 8)));
         for(auto i = index; i < n; i += stride)
         {
@@ -173,7 +173,7 @@ namespace // anonymous namespace for helper functions
     {
         auto const index = blockIdx.x * blockDim.x + threadIdx.x;
         auto const stride = blockDim.x * gridDim.x * 3; // 3 color components r,g,b
-        const auto width_padded  = (width  + (width  % 8 == 0 ? 0 : 8 - (width  % 8)))); 
+        const auto width_padded  = (width  + (width  % 8 == 0 ? 0 : 8 - (width  % 8))); 
         const auto height_padded = (height + (height % 8 == 0 ? 0 : 8 - (height % 8)));
         for(auto i = index; i < n; i += stride)
         {
@@ -190,7 +190,7 @@ namespace // anonymous namespace for helper functions
     {
         auto const index = blockIdx.x * blockDim.x + threadIdx.x;
         auto const stride = blockDim.x * gridDim.x * 3; // 3 color components r,g,b
-        const auto width_padded  = (width  + (width  % 8 == 0 ? 0 : 8 - (width  % 8)))); 
+        const auto width_padded  = (width  + (width  % 8 == 0 ? 0 : 8 - (width  % 8))); 
         const auto height_padded = (height + (height % 8 == 0 ? 0 : 8 - (height % 8)));
         for(auto i = index; i < n; i += stride)
         {
@@ -208,29 +208,28 @@ namespace // anonymous namespace for helper functions
         // process image 8 pixel rows at a time across all columns
         // memcpy chuck of 8 rows into temp array
         // async memcpy it back into source pointer
-        auto const index = blockIdx.x * blockDim.x + threadIdx.x;
-        auto const stride = blockDim.x * gridDim.x * 8; // copy 8 rows at a time
-        const auto strip_size = width * 8 * sizeof(float);
-        float* temp;
-        cudaMalloc(temp,strip_size); // allocate enough for 8 rows
-        for(auto i = index; i < height; i += stride) // for all the rows
+        const uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
+        const uint32_t stride = blockDim.x * gridDim.x * 8; // copy 8 rows at a time
+        const uint32_t strip_size = width * 8 * sizeof(float);
+        float* temp = new float[strip_size];
+        for(uint32_t i = index; i < height; i += stride) // for all the rows
         {
             float* const strip_ptr = &data[i * width]; // constant pointer to the current strip
-            cudaMemcpy(temp,strip_ptr,strip_size,cudaMemcpyDeviceToDevice);
+            memcpy(temp,strip_ptr,strip_size);
             // for loops are evil >:(, but this one is with asyncs so I guess it's ok
-            for(auto b = 0; b < width / 8, b++) // for each 8x8 block in the strip
+            for(uint32_t b = 0; b < width / 8; b++) // for each 8x8 block in the strip
             {
                 // double for loop! what are you trying to do to me man
-                for(auto l = 0; l < 8; l++) // for each line in that block
+                for(uint8_t l = 0; l < 8; l++) // for each line in that block
                 {
-                    cudaMemcpyAsync(&strip_ptr[b * constants::block_size + l],temp[l*8 + b * 8], 8 * sizeof(float), cudaMemcpyDeviceToDevice);
+                    memcpy(&strip_ptr[b * constants::block_size + l],&temp[l*8 + b * 8], 8 * sizeof(float));
                 }
             }
         }
-        cudaFree(temp);
+        delete[] temp;
     }
 
-    void launchConversionKernel(const uint8_t* pixels, const int n, const int width, const int height, auto conversion, float* output)
+    void launchConversionKernel(const uint8_t* pixels, const int n, const int width, const int height, constants::conversions conversion, float* output)
     {
         // convert the color data
         auto const cu_blockSize = 256;
@@ -303,18 +302,23 @@ namespace gpu
         // cudaDeviceSynchronize
         
         // if multithreaded. If we are facing memory limitations then we may need to do each channel separately
-        std::thread Y_thread (launchConversionKernel, pixels_cuda, n_padded, width, height, constants::Yonv  , Y_cuda );
-        std::thread Cb_thread(launchConversionKernel, pixels_cuda, n_padded, width, height, constants::CbConv, Cb_cuda);
-        std::thread Cr_thread(launchConversionKernel, pixels_cuda, n_padded, width, height, constants::CrConv, Cr_cuda);
-        std::thread threads[3] = {Y_thread,Cb_thread,Cr_thread};
-        for(auto i = 0; i < 3; i++)
+        std::thread* threads = new std::thread[3];
+        
+        threads[0] = std::thread(launchConversionKernel, pixels_cuda, n_padded, width, height, constants::YConv , Y_cuda );
+        threads[1] = std::thread(launchConversionKernel, pixels_cuda, n_padded, width, height, constants::CbConv, Cb_cuda);
+        threads[2] = std::thread(launchConversionKernel, pixels_cuda, n_padded, width, height, constants::CrConv, Cr_cuda);
+        
+        for(uint8_t i = 0; i < 3; i++)
+        {
             threads[i].join();
+        }
+
         // else just launch the kernels one by one
         
         // make sure each array has enough allocated, since image may grow due to padding to 8x8 blocks
-        Y  = realloc(Y,  n_padded * sizeof(float));
-        Cb = realloc(Cb, n_padded * sizeof(float));
-        Cr = realloc(Cr, n_padded * sizeof(float));
+        Y  = (float*) realloc(Y,  n_padded * sizeof(float));
+        Cb = (float*) realloc(Cb, n_padded * sizeof(float));
+        Cr = (float*) realloc(Cr, n_padded * sizeof(float));
 
         // copy data from cuda back to 
         cudaMemcpyAsync(Y,  Y_cuda,  n_padded * sizeof(float), cudaMemcpyDeviceToHost);
@@ -348,7 +352,8 @@ namespace gpu
 		// Cb = rgb2Cb(data)
 		// Cr = rgb2Cr(data)
 		// cudaDeviceSynchronize
-		// n = number of 8*8 blocks in Y, length of Cb,Cr is 1/4 N
+        // n = number of 8*8 blocks in Y, length of Cb,Cr is 1/4 N
+        return 0;
 	}
 
 	/* 
@@ -359,7 +364,8 @@ namespace gpu
 	{
         // Y = pixel - 128.f but in CUDA
         // pad to 8x8 and reshape data
-		// int n = number of 8x8 blocks 
+        // int n = number of 8x8 blocks 
+        return 0;
     }
     
     /* 
@@ -368,7 +374,7 @@ namespace gpu
 		posNonZero will store the position of the last non zero value for each N blocks
 		n is the number of blocks
 	*/
-	void transformBlock_many(float* const data, const float* const scale, const uint32_t n, uint8_t* posNonZero, int16_t* quantized)
+	void transformBlock_many(const float* data, const float* scale, const uint32_t n, uint8_t* posNonZero, int16_t* quantized)
 	{
         // Prepare scale matrix
             // elementwise mult the given scale matrix with the dct correction matrix
@@ -391,32 +397,32 @@ namespace gpu
         // quantize (process many blocks at a time with paralell inside each block too)
         int16_t* quantized_cuda;
         cudaMalloc(&quantized_cuda,n * constants::block_size_mem);
-        quantize_many<<<n,constants::block_size>>>(data_cuda,n,quantized_cuda);
+        quantize_many<<<n,constants::block_size>>>(data_cuda,n,ZigZagInv_cuda,quantized_cuda);
         cudaDeviceSynchronize();
 
         cudaFree(data_cuda);
 
 		// find pos non zero (paralell many blocks but serial inside block)
             // start counting from back and stop at first non-zero value, can skip most of the block then
-        uint8_t* posNonZeros_cuda;
-        cudaMalloc(&posNonZeros_cuda, n * sizeof(uint8_t));
+        uint8_t* posNonZero_cuda;
+        cudaMalloc(&posNonZero_cuda, n * sizeof(uint8_t));
 
         int cu_blockSize = 256;
-        int cu_numBlocks = (n / cu_blockSize) + 1
+        int cu_numBlocks = (n / cu_blockSize) + 1;
 
-        find_posNonZero_many<<<cu_numBlocks,cu_blockSize>>>(quantized_cuda, n, posNonZeros_cuda);
+        find_posNonZero_many<<<cu_numBlocks,cu_blockSize>>>(quantized_cuda, n, posNonZero_cuda);
         
         // prepare the destination pointers
-        quantized = realloc(quantized, n * constants::block_size * sizeof(int16_t));
-        posNonZeros = realloc(posNonZeros, n * sizeof(uint8_t));
+        quantized  = (int16_t*) realloc(quantized, n * constants::block_size * sizeof(int16_t));
+        posNonZero = (uint8_t*) realloc(posNonZero, n * sizeof(uint8_t));
         cudaDeviceSynchronize();
 
         // copy data back from the device to the cpu
         cudaMemcpy(quantized,   quantized_cuda,   n * constants::block_size * sizeof(int16_t),  cudaMemcpyDeviceToHost);
-        cudaMemcpy(posNonZeros, posNonZeros_cuda, n * sizeof(uint8_t),                          cudaMemcpyDeviceToHost);
+        cudaMemcpy(posNonZero, posNonZero_cuda, n * sizeof(uint8_t),                          cudaMemcpyDeviceToHost);
         
         cudaFree(new_scale);
         cudaFree(quantized_cuda);
-        cudaFree(posNonZeros_cuda);
+        cudaFree(posNonZero_cuda);
 	}
 }
