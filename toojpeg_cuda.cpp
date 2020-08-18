@@ -156,6 +156,21 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		BitCode codewords[2 * CodeWordLimit];
 	};
 
+	struct PixelData
+	{
+		int16_t* quantY;
+		int16_t* quantCb;
+		int16_t* quantCr;
+
+		uint8_t* posNonZeroY;
+		uint8_t* posNonZeroCb;
+		uint8_t* posNonZeroCr;
+
+		uint32_t num_blocks;
+
+
+	};
+	
 	// ////////////////////////////////////////
 	// functions / templates
 
