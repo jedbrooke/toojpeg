@@ -9,3 +9,4 @@ examples/earth.bmp
 examples/earth.jpg
 examples/example_large.bmp
 examples/example_large.jpg
+*.o
