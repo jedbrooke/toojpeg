@@ -190,18 +190,15 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		return value;                           // value was inside interval, keep it
 	}
 
-	void generate_quantization_tables(unsigned char quality_,
-									  float* LumScale, float* ChromScale)
+	void generate_quantization_tables (const unsigned char quality_,
+		uint8_t quantLuminance[8*8], uint8_t quantChrominance[8*8])
 	{
 		// quality level must be in 1 ... 100
 		auto quality = clamp<uint16_t>(quality_, 1, 100);
 		// convert to an internal JPEG quality factor, formula taken from libjpeg
 		quality = quality < 50 ? 5000 / quality : 200 - quality * 2;
 
-
 		/* Probably not worth paralellizing this step since it's only 64 loops */
-		uint8_t quantLuminance  [8*8];
-		uint8_t quantChrominance[8*8];
 		for (auto i = 0; i < 8*8; i++)
 		{
 			int luminance   = (constants::DefaultQuantLuminance  [constants::ZigZagInv[i]] * quality + 50) / 100;
@@ -211,10 +208,12 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 			quantLuminance  [i] = clamp(luminance,   1, 255);
 			quantChrominance[i] = clamp(chrominance, 1, 255);
 		}
+	}
 
+	void generate_quantization_tables_scaled(const uint8_t quantLuminance  [8*8], const uint8_t quantChrominance[8*8],
+									        float* LumScale, float* ChromScale)
+	{
 		// adjust quantization tables with AAN scaling factors to simplify DCT
-		float scaledLuminance  [8*8];
-		float scaledChrominance[8*8];
 		for (auto i = 0; i < 8*8; i++)
 		{
 			auto row    = constants::ZigZagInv[i] / 8; // same as ZigZagInv[i] >> 3
@@ -223,47 +222,48 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 			// scaling constants for AAN DCT algorithm: AanScaleFactors[0] = 1, AanScaleFactors[k=1..7] = cos(k*PI/16) * sqrt(2)
 			static const float AanScaleFactors[8] = { 1, 1.387039845f, 1.306562965f, 1.175875602f, 1, 0.785694958f, 0.541196100f, 0.275899379f };
 			auto factor = 1 / (AanScaleFactors[row] * AanScaleFactors[column] * 8);
-			scaledLuminance  [constants::ZigZagInv[i]] = factor / quantLuminance  [i];
-			scaledChrominance[constants::ZigZagInv[i]] = factor / quantChrominance[i];
-			// if you really want JPEGs that are bitwise identical to Jon Olick's code then you need slightly different formulas (note: sqrt(8) = 2.828427125f)
-			//static const float aasf[] = { 1.0f * 2.828427125f, 1.387039845f * 2.828427125f, 1.306562965f * 2.828427125f, 1.175875602f * 2.828427125f, 1.0f * 2.828427125f, 0.785694958f * 2.828427125f, 0.541196100f * 2.828427125f, 0.275899379f * 2.828427125f }; // line 240 of jo_jpeg.cpp
-			//scaledLuminance  [ZigZagInv[i]] = 1 / (quantLuminance  [i] * aasf[row] * aasf[column]); // lines 266-267 of jo_jpeg.cpp
-			//scaledChrominance[ZigZagInv[i]] = 1 / (quantChrominance[i] * aasf[row] * aasf[column]);
+			LumScale  [constants::ZigZagInv[i]] = factor / quantLuminance  [i];
+			ChromScale[constants::ZigZagInv[i]] = factor / quantChrominance[i];
 		}
+
+
 	}
 	/* 
 		inputs are the image data, width, height, color information, and whether to downsample or not, and quantization tables for Y and Cb/Cr
 		outputs are quantized data, and position of the last nonzero element in each block
 	*/
 
-	int process_pixels(uint8_t* data, const int width, const int height, const bool isRGB, const bool downsample, const float* LumScale, const float* ChromScale,
-						uint8_t* posNonZeroY, uint8_t* posNonZeroCb, uint8_t* posNonZeroCr,
-						int16_t* quantY, int16_t* quantCb, int16_t* quantCr) 
+	PixelData process_pixels(const uint8_t* data, const int width, const int height, const bool isRGB, const bool downsample, HeaderTables tables) 
 	{
+		PixelData output;
 		// initialize gpu constants in VRAM
 		gpu::initializeDevice();
 		// prepare DCT scale matrix while converting RGB to YCbCr
 		float* LumScaleDCT   = new float[constants::block_size];
 		float* ChromScaleDCT = new float[constants::block_size];
-		std::thread prep_blocks([LumScale,LumScaleDCT,ChromScale,ChromScaleDCT]()
+		std::thread prep_blocks([tables,LumScaleDCT,ChromScaleDCT]()
 		{
+			float*  LumScale   = new float[constants::block_size];
+			float*  ChromScale = new float[constants::block_size];
+			generate_quantization_tables_scaled(tables.quantLuminance,tables.quantChrominance,LumScale,ChromScale);
 			for(auto i = 0; i < constants::block_size; i++)
 			{
 				LumScaleDCT[i]   = LumScale[i]   * constants::dct_correction_matrix[i];
 				ChromScaleDCT[i] = ChromScale[i] * constants::dct_correction_matrix[i];
 			}
+			delete[] LumScale;
+			delete[] ChromScale;
 		});
 		// convert image data 
 		float* Y, *Cb, *Cr;
-		int num_blocks;
 		if(isRGB) {	
 			if(downsample) {
-				num_blocks = gpu::convertRGBtoYCbCr420(data,width,height,Y,Cb,Cr);
+				output.num_blocks = gpu::convertRGBtoYCbCr420(data,width,height,Y,Cb,Cr);
 			} else {
-				num_blocks = gpu::convertRGBtoYCbCr444(data,width,height,Y,Cb,Cr);
+				output.num_blocks = gpu::convertRGBtoYCbCr444(data,width,height,Y,Cb,Cr);
 			}
 		} else {
-			num_blocks = gpu::convertBWtoY(data,width,height,Y);
+			output.num_blocks = gpu::convertBWtoY(data,width,height,Y);
 			delete Cb;
 			delete Cr;
 		}
@@ -271,12 +271,12 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		// wait for the prep blocks thread to finish, we will need the blocks ready for the DCT
 		prep_blocks.join();
 		
-		gpu::transformBlock_many(Y, LumScaleDCT, num_blocks, posNonZeroY, quantY);
+		gpu::transformBlock_many(Y, LumScaleDCT, output.num_blocks, output.posNonZeroY, output.quantY);
 
 		if(isRGB) { //if image is RGB process chroma too
-			// possibly run in parallel? 
-			gpu::transformBlock_many(Cb, ChromScaleDCT, num_blocks / (downsample ? 4 : 1), posNonZeroCb, quantCb);
-			gpu::transformBlock_many(Cr, ChromScaleDCT, num_blocks / (downsample ? 4 : 1), posNonZeroCr, quantCr);
+			// possibly run in parallel? detect multiple gpus?
+			gpu::transformBlock_many(Cb, ChromScaleDCT, output.num_blocks / (downsample ? 4 : 1), output.posNonZeroCb, output.quantCb);
+			gpu::transformBlock_many(Cr, ChromScaleDCT, output.num_blocks / (downsample ? 4 : 1), output.posNonZeroCr, output.quantCr);
 		}
 		// blocks are all processed, we are now ready for writing
 		
@@ -288,8 +288,9 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		}
 		delete[] LumScaleDCT;
 		delete[] ChromScaleDCT;
+		gpu::retireDevice();
 
-		return num_blocks;
+		return output;
 	}
 
 	/* 
@@ -298,7 +299,6 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 	int16_t writeBlock(BitWriter& writer, int16_t* block, int16_t lastDC,
 		const BitCode huffmanDC[256], const BitCode huffmanAC[256], const BitCode* codewords, int posNonZero)
 	{
-		auto block64 = (float*) block;
 		/* 
 			Step 5: Begin HuffmanEncoding
 			Paralellizability: none, each block depends on previous
@@ -306,7 +306,7 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		*/
 
 		// same "average color" as previous block ?
-		auto DC = int(block64[0] + (block64[0] >= 0 ? +0.5f : -0.5f));
+		auto DC = int(block[0] + (block[0] >= 0 ? +0.5f : -0.5f));
 		auto diff = DC - lastDC;
 		if (diff == 0)
 			writer << huffmanDC[0x00];   // yes, write a special short symbol
@@ -327,7 +327,7 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		for (auto i = 1; i <= posNonZero; i++) // quantized[0] was already written, skip all trailing zeros, too
 		{
 			// zeros are encoded in a special way
-			while (quantized[i] == 0) // found another zero ?
+			while (block[i] == 0) // found another zero ?
 			{
 				offset    += 0x10; // add 1 to the upper 4 bits
 				// split into blocks of at most 16 consecutive zeros
@@ -339,7 +339,7 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 				i++;
 			}
 
-			auto encoded = codewords[quantized[i]];
+			auto encoded = codewords[block[i]];
 			// combine number of zeros with the number of bits of the next non-zero value
 			writer << huffmanAC[offset + encoded.numBits] << encoded; // and the value itself
 			offset = 0;
@@ -354,12 +354,30 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 
 
 
-	void writeBlock_many(BitWriter& writer, float* const data, const uint32_t n, const BitCode huffmanDC[256], const BitCode huffmanAC[256], const BitCode* codewords)
+	void writeBlock_many(BitWriter& writer, HeaderTables tables, PixelData data, bool isRGB, bool downsample)
 	{
+		
 		// for block in data
 			// compare to DC of last block
 			// encode non-zeros in block
 			// encode zeros in block
+		auto chroma_i = 0;
+		int16_t lastYDC, lastCbDC, lastCrDC = 0;
+		for(auto i = 0; i < data.num_blocks; i++)
+		{
+			chroma_i = i;
+			for(auto j = 0; j < (downsample ? 4 : 1); j++)
+			{
+				// encode Y
+				lastYDC = writeBlock(writer,&data.quantY[i * constants::block_size],lastYDC,tables.huffmanLuminanceDC,tables.huffmanLuminanceAC,tables.codewords,data.posNonZeroY[i]);
+				i++;
+			}
+			// encode Cb
+			lastCbDC = writeBlock(writer,&data.quantY[chroma_i * constants::block_size],lastCbDC,tables.huffmanChrominanceDC,tables.huffmanChrominanceAC,tables.codewords,data.posNonZeroCb[chroma_i]);
+			// encode Cr
+			lastCrDC = writeBlock(writer,&data.quantY[chroma_i * constants::block_size],lastCrDC,tables.huffmanChrominanceDC,tables.huffmanChrominanceAC,tables.codewords,data.posNonZeroCr[chroma_i]);
+		}
+		
 	
 	}
 
@@ -380,23 +398,9 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 			huffmanCode <<= 1;
 		}
 	}
-} // end of anonymous namespace
 
-// -------------------- externally visible code --------------------
-
-namespace TooJpeg
-{
-	// the only exported function ...
-	bool writeJpeg(WRITE_ONE_BYTE output, const void* pixels_, unsigned short width, unsigned short height,
-					 bool isRGB, unsigned char quality_, bool downsample, const char* comment)
+	HeaderTables writeHeader(BitWriter bitWriter, unsigned short width, unsigned short height, bool isRGB, unsigned char quality_, bool downsample, const char* comment)
 	{
-		// reject invalid pointers
-		if (output == nullptr || pixels_ == nullptr)
-			return false;
-		// check image format
-		if (width == 0 || height == 0)
-			return false;
-
 		// number of components
 		const auto numComponents = isRGB ? 3 : 1;
 		// note: if there is just one component (=grayscale), then only luminance needs to be stored in the file
@@ -406,9 +410,6 @@ namespace TooJpeg
 		// grayscale images can't be downsampled (because there are no Cb + Cr channels)
 		if (!isRGB)
 			downsample = false;
-
-		// wrapper for all output operations
-		BitWriter bitWriter(output);
 
 		// ////////////////////////////////////////
 		// JFIF headers
@@ -441,9 +442,11 @@ namespace TooJpeg
 
 		// ////////////////////////////////////////
 		// adjust quantization tables to desired quality
-
+		uint8_t quantLuminance[8*8];
+		uint8_t quantChrominance[8*8];
+		generate_quantization_tables(quality_,quantLuminance,quantChrominance);
 		
-
+		
 		// write quantization tables
 		bitWriter.addMarker(0xDB, 2 + (isRGB ? 2 : 1) * (1 + 8*8)); // length: 65 bytes per table + 2 bytes for this length field
 																	// each table has 64 entries and is preceded by an ID byte
@@ -547,6 +550,44 @@ namespace TooJpeg
 			codewords[+value] = BitCode(       value, numBits);
 		}
 
+		HeaderTables tables;
+
+		memcpy(tables.quantLuminance,   quantLuminance,   8 * 8 * sizeof(uint8_t));
+		memcpy(tables.quantChrominance, quantChrominance, 8 * 8 * sizeof(uint8_t));
+		
+		memcpy(tables.huffmanLuminanceDC, huffmanLuminanceDC, 256 * sizeof(BitCode));
+		memcpy(tables.huffmanLuminanceAC, huffmanLuminanceAC, 256 * sizeof(BitCode));
+
+		memcpy(tables.huffmanChrominanceDC, huffmanChrominanceDC, 256 * sizeof(BitCode));
+		memcpy(tables.huffmanChrominanceAC, huffmanChrominanceAC, 256 * sizeof(BitCode));
+
+		memcpy(tables.codewords, codewords, 2 * CodeWordLimit * sizeof(BitCode));
+
+		return tables;
+
+	}
+
+} // end of anonymous namespace
+
+// -------------------- externally visible code --------------------
+
+namespace TooJpeg
+{
+	// the only exported function ...
+	bool writeJpeg(WRITE_ONE_BYTE output, const void* pixels_, unsigned short width, unsigned short height,
+					 bool isRGB, unsigned char quality_, bool downsample, const char* comment)
+	{
+		// reject invalid pointers
+		if (output == nullptr || pixels_ == nullptr)
+			return false;
+		// check image format
+		if (width == 0 || height == 0)
+			return false;
+		// wrapper for all output operations
+		BitWriter bitWriter(output);
+
+		HeaderTables tables = writeHeader(bitWriter, width, height, isRGB, quality_, downsample, comment);
+
 		// just convert image data from void*
 		auto pixels = (const uint8_t*)pixels_;
 
@@ -556,7 +597,6 @@ namespace TooJpeg
 
 		// process MCUs (minimum codes units) => image is subdivided into a grid of 8x8 or 16x16 tiles
 		const auto sampling = downsample ? 2 : 1; // 1x1 or 2x2 sampling
-		const auto mcuSize  = 8 * sampling;
 
 
 		/* 
@@ -579,7 +619,8 @@ namespace TooJpeg
 
 		*/
 
-
+		PixelData data = process_pixels(pixels,width,height,isRGB,downsample,tables);
+		writeBlock_many(bitWriter,tables,data,isRGB,downsample);
 
 
 		bitWriter.flush(); // now image is completely encoded, write any bits still left in the buffer

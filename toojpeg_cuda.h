@@ -18,6 +18,7 @@
 #pragma once
 #include <math.h>
 #include <thread>
+#include <string.h>
 #include "constants.h"
 #include "gpu.h"
 
