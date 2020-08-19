@@ -10,3 +10,4 @@ examples/earth.jpg
 examples/example_large.bmp
 examples/example_large.jpg
 *.o
+example_cuda.jpg
