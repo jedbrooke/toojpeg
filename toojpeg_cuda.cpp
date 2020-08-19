@@ -156,21 +156,49 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		BitCode codewords[2 * CodeWordLimit];
 	};
 
-	struct PixelData
+	class PixelData
 	{
+	public:
 		int16_t* quantY;
 		int16_t* quantCb;
 		int16_t* quantCr;
-
+ 
 		uint8_t* posNonZeroY;
 		uint8_t* posNonZeroCb;
 		uint8_t* posNonZeroCr;
 
 		uint32_t num_blocks;
 
-
+		PixelData(uint32_t _num_pixels);
+		~PixelData();
 	};
 	
+	void debug_log(std::string s);
+	
+	PixelData::PixelData(uint32_t _num_pixels)
+	{
+		num_blocks = _num_pixels / 64;
+		quantY = new int16_t[_num_pixels];
+		quantCb = new int16_t[_num_pixels];
+		quantCr = new int16_t[_num_pixels];
+
+		posNonZeroY = new uint8_t[num_blocks];
+		posNonZeroCb = new uint8_t[num_blocks];
+		posNonZeroCr = new uint8_t[num_blocks];
+
+	}
+	
+	PixelData::~PixelData()
+	{
+		debug_log("deleting pixel data");
+		delete[] quantY;
+		delete[] quantCb;
+		delete[] quantCr;
+ 
+		delete[] posNonZeroY;
+		delete[] posNonZeroCb;
+		delete[] posNonZeroCr;
+	}
 	// ////////////////////////////////////////
 	// functions / templates
 
