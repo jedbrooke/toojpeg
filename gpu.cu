@@ -26,6 +26,27 @@ namespace // anonymous namespace for helper functions
         cudaFree(ZigZagInv_cuda);
     }
 
+    std::string last_msg("");
+    int repeat_count = 0;
+    void debug_log(std::string s)
+	{
+		if (GPU_DEBUG)
+		{
+            if(last_msg.compare(s) == 0) { // if the current string is the same at the last one
+                repeat_count += 1;
+            } else {
+                if(repeat_count > 0)
+                {
+                    std::cout << last_msg << "(" << repeat_count << ")" << std::endl;
+                    repeat_count = 0;
+                }
+                std::cout << s << std::endl;
+                last_msg = std::string(s.c_str());                
+            }
+            
+		}
+	}
+
     __global__
     void elementwise_mult_8x8_multi(const float* K, float* A, const uint32_t n)
     {   
@@ -266,6 +287,7 @@ namespace gpu
     }
     void retireDevice()
     {
+        debug_log(" ");
         unloadTransformConstants();
         isTransformConstsLoaded = false;
     }
@@ -329,6 +351,8 @@ namespace gpu
 
         // make sure everything is done
         cudaDeviceSynchronize();
+
+        debug_log("rgb2ycbcr done, first Y: " + std::to_string(Y[0]));
 
         // free the memory
         cudaFree(pixels_cuda);
@@ -422,6 +446,7 @@ namespace gpu
         // copy data back from the device to the cpu
         cudaMemcpy(quantized,   quantized_cuda,   n * constants::block_size * sizeof(int16_t),  cudaMemcpyDeviceToHost);
         cudaMemcpy(posNonZero, posNonZero_cuda, n * sizeof(uint8_t),                          cudaMemcpyDeviceToHost);
+        debug_log("data transformed, 1st value: " + std::to_string(quantized[0]));
         
         cudaFree(new_scale);
         cudaFree(quantized_cuda);

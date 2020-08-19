@@ -1,5 +1,9 @@
 #include <thread>
 #include <stdlib.h>
+#include <string.h>
+#include <iostream>
+
+#define GPU_DEBUG true
 
 #pragma once
 #include "constants.h"

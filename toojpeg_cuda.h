@@ -18,7 +18,10 @@
 #include <math.h>
 #include <thread>
 #include <string.h>
+#include <iostream>
 #include "gpu.h"
+
+#define PRINT_DEBUG true
 
 namespace TooJpeg
 {

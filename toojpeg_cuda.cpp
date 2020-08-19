@@ -199,6 +199,16 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		delete[] posNonZeroCb;
 		delete[] posNonZeroCr;
 	}
+	
+
+	void debug_log(std::string s)
+	{
+		if (PRINT_DEBUG)
+		{
+			std::cout << std::string(s) << std::endl;
+		}
+	}
+	
 	// ////////////////////////////////////////
 	// functions / templates
 
@@ -265,12 +275,16 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 	{
 		PixelData output;
 		// initialize gpu constants in VRAM
+		debug_log("initializing GPU");
+		debug_log("first pixel:");
+		debug_log(std::to_string(data[0]) + "," + std::to_string(data[1]) + "," + std::to_string(data[2]));
 		gpu::initializeDevice();
 		// prepare DCT scale matrix while converting RGB to YCbCr
 		float* LumScaleDCT   = new float[constants::block_size];
 		float* ChromScaleDCT = new float[constants::block_size];
 		std::thread prep_blocks([tables,LumScaleDCT,ChromScaleDCT]()
 		{
+			debug_log("preping scale blocks");
 			float*  LumScale   = new float[constants::block_size];
 			float*  ChromScale = new float[constants::block_size];
 			generate_quantization_tables_scaled(tables.quantLuminance,tables.quantChrominance,LumScale,ChromScale);
@@ -284,26 +298,34 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		});
 		// convert image data 
 		float* Y, *Cb, *Cr;
+		debug_log("converting RGB to YCbCr");
 		if(isRGB) {	
 			if(downsample) {
+				debug_log("color, downsampled"); 
 				output.num_blocks = gpu::convertRGBtoYCbCr420(data,width,height,Y,Cb,Cr);
 			} else {
+				debug_log("color, no downsampling"); 
 				output.num_blocks = gpu::convertRGBtoYCbCr444(data,width,height,Y,Cb,Cr);
 			}
 		} else {
+			debug_log("BW"); 
 			output.num_blocks = gpu::convertBWtoY(data,width,height,Y);
 			delete Cb;
 			delete Cr;
 		}
 
+		debug_log("first Y: " + std::to_string(Y[0]));
 		// wait for the prep blocks thread to finish, we will need the blocks ready for the DCT
 		prep_blocks.join();
 		
+		debug_log("DCT transforming and quantizing Y");
 		gpu::transformBlock_many(Y, LumScaleDCT, output.num_blocks, output.posNonZeroY, output.quantY);
 
 		if(isRGB) { //if image is RGB process chroma too
 			// possibly run in parallel? detect multiple gpus?
+			debug_log("DCT transforming and quantizing Cb");
 			gpu::transformBlock_many(Cb, ChromScaleDCT, output.num_blocks / (downsample ? 4 : 1), output.posNonZeroCb, output.quantCb);
+			debug_log("DCT transforming and quantizing Cr");
 			gpu::transformBlock_many(Cr, ChromScaleDCT, output.num_blocks / (downsample ? 4 : 1), output.posNonZeroCr, output.quantCr);
 		}
 		// blocks are all processed, we are now ready for writing
@@ -333,6 +355,7 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 			Status: not done
 		*/
 
+		// debug_log("Checking diff");
 		// same "average color" as previous block ?
 		auto DC = int(block[0] + (block[0] >= 0 ? +0.5f : -0.5f));
 		auto diff = DC - lastDC;
@@ -351,6 +374,7 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		*/
 
 		// encode ACs (quantized[1..63])
+		// debug_log("encoding ACs");
 		auto offset = 0; // upper 4 bits count the number of consecutive zeros
 		for (auto i = 1; i <= posNonZero; i++) // quantized[0] was already written, skip all trailing zeros, too
 		{
@@ -374,6 +398,7 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		}
 
 		// send end-of-block code (0x00), only needed if there are trailing zeros
+		// debug_log("encoding trailing zeros");
 		if (posNonZero < 8*8 - 1) // = 63
 			writer << huffmanAC[0x00];
 
@@ -392,7 +417,14 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		auto chroma_i = 0;
 		int16_t lastYDC, lastCbDC, lastCrDC = 0;
 		for(auto i = 0; i < data.num_blocks; i++)
+		auto num_blocks_str = std::to_string(data->num_blocks);
 		{
+			std::string msg("Writing block ");
+			msg += std::to_string(i+1);
+			msg += " of ";
+			msg += num_blocks_str;
+			debug_log(msg);
+		
 			chroma_i = i;
 			for(auto j = 0; j < (downsample ? 4 : 1); j++)
 			{
@@ -405,6 +437,7 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 			// encode Cr
 			lastCrDC = writeBlock(writer,&data.quantY[chroma_i * constants::block_size],lastCrDC,tables.huffmanChrominanceDC,tables.huffmanChrominanceAC,tables.codewords,data.posNonZeroCr[chroma_i]);
 		}
+		debug_log("finished writing blocks");
 		
 	
 	}
@@ -647,8 +680,11 @@ namespace TooJpeg
 
 		*/
 
+		debug_log("running GPU code");
 		PixelData data = process_pixels(pixels,width,height,isRGB,downsample,tables);
 		writeBlock_many(bitWriter,tables,data,isRGB,downsample);
+		debug_log("writing data");
+		debug_log("data written, flushing buffers");
 
 
 		bitWriter.flush(); // now image is completely encoded, write any bits still left in the buffer
