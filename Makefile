@@ -14,4 +14,10 @@ gpu.o: gpu.cu
 	nvcc -c --default-stream per-thread -arch=sm_35 -Xcompiler "$(CFLAGS)" gpu.cu -o gpu.o  
 
 clean:
-	rm -f toojpeg_cuda.o gpu.o
+	rm -f toojpeg_cuda.o gpu.o examples/example_cuda
+
+clean-gpu:
+	rm -f gpu.o
+
+clean-main:
+	rm -f toojpeg_cuda.o examples/example_cuda

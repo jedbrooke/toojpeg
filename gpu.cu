@@ -174,34 +174,33 @@ namespace // anonymous namespace for helper functions
     __global__ 
     void convertRGBtoY(const uint8_t* pixels, const int n, const int width, const int height, float* Y)
     {
-        auto const index = blockIdx.x * blockDim.x + threadIdx.x;
-        auto const stride = blockDim.x * gridDim.x * 3; // 3 color components r,g,b
+        const auto index = (blockIdx.x * blockDim.x + threadIdx.x);
+        const auto stride = blockDim.x * gridDim.x; 
         const auto width_padded  = (width  + (width  % 8 == 0 ? 0 : 8 - (width  % 8))); 
         const auto height_padded = (height + (height % 8 == 0 ? 0 : 8 - (height % 8)));
-        for(auto i = index; i < n; i += stride)
+        for (auto i = index; i < n; i += stride)
         {
             // find x and y, if x >= width x=width - 1, if y >= height y = height - 1
             const auto x = (i % width_padded)  >= width  ? width  - 1 : (i % width_padded );
             const auto y = (i / height_padded) >= height ? height - 1 : (i / height_padded);
-            const auto pos = y*width + x;
-            Y[i] = +0.299f * pixels[pos + 0] + 0.587f * pixels[pos + 1] + 0.114f * pixels[pos + 2];
-            Y[i] =- 128.f;
+            const auto pos = (y*width + x) * 3; // mult 3 for 3 color components r,g,b
+            Y[i] = (+0.299f * pixels[pos + 0] + 0.587f * pixels[pos + 1] + 0.114f * pixels[pos + 2]) - 128.f;
         } 
     }
 
     __global__ 
     void convertRGBtoCb(const uint8_t* pixels, const int n, const int width, const int height, float* Cb)
     {
-        auto const index = blockIdx.x * blockDim.x + threadIdx.x;
-        auto const stride = blockDim.x * gridDim.x * 3; // 3 color components r,g,b
+        const auto index = (blockIdx.x * blockDim.x + threadIdx.x);
+        const auto stride = blockDim.x * gridDim.x;
         const auto width_padded  = (width  + (width  % 8 == 0 ? 0 : 8 - (width  % 8))); 
         const auto height_padded = (height + (height % 8 == 0 ? 0 : 8 - (height % 8)));
-        for(auto i = index; i < n; i += stride)
+        for (auto i = index; i < n; i += stride)
         {
             // find x and y, if x >= width x=width - 1, if y >= height y = height - 1
             const auto x = (i % width_padded)  >= width  ? width  - 1 : (i % width_padded );
             const auto y = (i / height_padded) >= height ? height - 1 : (i / height_padded);
-            const auto pos = y*width + x;
+            const auto pos = (y*width + x) * 3; // mult 3 for 3 color components r,g,b
             Cb[i] = -0.16874f * pixels[pos + 0] - 0.33126f * pixels[pos + 1] + 0.5f * pixels[pos + 2]; 
         } 
     }
@@ -209,8 +208,8 @@ namespace // anonymous namespace for helper functions
     __global__ 
     void convertRGBtoCr(const uint8_t* pixels, const int n, const int width, const int height, float* Cr)
     {
-        auto const index = blockIdx.x * blockDim.x + threadIdx.x;
-        auto const stride = blockDim.x * gridDim.x * 3; // 3 color components r,g,b
+        const auto index = (blockIdx.x * blockDim.x + threadIdx.x);
+        const auto stride = blockDim.x * gridDim.x * 3;
         const auto width_padded  = (width  + (width  % 8 == 0 ? 0 : 8 - (width  % 8))); 
         const auto height_padded = (height + (height % 8 == 0 ? 0 : 8 - (height % 8)));
         for(auto i = index; i < n; i += stride)
@@ -218,7 +217,7 @@ namespace // anonymous namespace for helper functions
             // find x and y, if x >= width x=width - 1, if y >= height y = height - 1
             const auto x = (i % width_padded)  >= width  ? width  - 1 : (i % width_padded );
             const auto y = (i / height_padded) >= height ? height - 1 : (i / height_padded);
-            const auto pos = y*width + x;
+            const auto pos = (y*width + x) * 3; // mult 3 for 3 color components r,g,b
             Cr[i] = +0.5f * pixels[pos + 0] - 0.41869f * pixels[pos + 1] +0.5f * pixels[pos + 2];
         } 
     }
@@ -229,23 +228,21 @@ namespace // anonymous namespace for helper functions
         // process image 8 pixel rows at a time across all columns
         // memcpy chuck of 8 rows into temp array
         // async memcpy it back into source pointer
-        const uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
-        const uint32_t stride = blockDim.x * gridDim.x * 8; // copy 8 rows at a time
+        const uint32_t index = (blockIdx.x * blockDim.x + threadIdx.x);
+        const uint32_t stride = blockDim.x * gridDim.x; // copy 8 rows at a time
         const uint32_t strip_size = width * 8 * sizeof(float);
         float* temp = new float[strip_size];
-        for(uint32_t i = index; i < height; i += stride) // for all the rows
+        for(uint32_t i = index; i < height / 8; i += stride) // for all the rows of blocks
         {
-            float* const strip_ptr = &data[i * width]; // constant pointer to the current strip
+            float* strip_ptr = &data[i * 8 * width]; // constant pointer to the current strip
             memcpy(temp,strip_ptr,strip_size);
-            // for loops are evil >:(, but this one is with asyncs so I guess it's ok
-#pragma unroll
+            // for loops are evil >:(
             for(uint32_t b = 0; b < width / 8; b++) // for each 8x8 block in the strip
             {
                 // double for loop! what are you trying to do to me man
-#pragma unroll
                 for(uint8_t l = 0; l < 8; l++) // for each line in that block
                 {
-                    memcpy(&strip_ptr[b * constants::block_size + l],&temp[l*8 + b * 8], 8 * sizeof(float));
+                    memcpy(&strip_ptr[b * constants::block_size + l * 8],&temp[l*8 + b * 8], 8 * sizeof(float));
                 }
             }
         }
@@ -268,10 +265,11 @@ namespace // anonymous namespace for helper functions
             case constants::CrConv:
                 convertRGBtoCr<<<cu_numBlocks,cu_blockSize>>>(pixels,n,width,height,output);
         }
-        
+        const auto width_padded  = (width  + (width  % 8 == 0 ? 0 : 8 - (width  % 8))); 
+        const auto height_padded = (height + (height % 8 == 0 ? 0 : 8 - (height % 8)));
         cudaStreamSynchronize(0);
         // reshape the data in to 8x8 blocks
-        reshape_data_to_blocks<<<cu_numBlocks,cu_blockSize>>>(output,width,height);
+        reshape_data_to_blocks<<<(height / 64) + 1,8>>>(output,width_padded,height_padded);
         cudaStreamSynchronize(0);
     }
 
@@ -305,9 +303,8 @@ namespace gpu
         float* Cb_cuda;
         float* Cr_cuda;
 
-
-        const auto n_datas = width * height * 3;
         // n = total num items (width*height) * 3
+        const auto n_datas = width * height * 3;
         // width and height are each rounded up to nearest multiple of 8 to prepare for converting data to 8x8 blocks
         const auto n_padded = (width + (width % 8 == 0 ? 0 : 8 - (width % 8))) * (height + (height % 8 == 0 ? 0 : 8 - (height % 8)));
 
@@ -326,23 +323,32 @@ namespace gpu
         // cudaDeviceSynchronize
         
         // if multithreaded. If we are facing memory limitations then we may need to do each channel separately
-        std::thread* threads = new std::thread[3];
+        bool multithreaded = false;
+        if(multithreaded) {
+            std::thread* threads = new std::thread[3];
         
-        threads[0] = std::thread(launchConversionKernel, pixels_cuda, n_padded, width, height, constants::YConv , Y_cuda );
-        threads[1] = std::thread(launchConversionKernel, pixels_cuda, n_padded, width, height, constants::CbConv, Cb_cuda);
-        threads[2] = std::thread(launchConversionKernel, pixels_cuda, n_padded, width, height, constants::CrConv, Cr_cuda);
-        
-        for(uint8_t i = 0; i < 3; i++)
-        {
-            threads[i].join();
+            threads[0] = std::thread(launchConversionKernel, pixels_cuda, n_padded, width, height, constants::YConv , Y_cuda );
+            threads[1] = std::thread(launchConversionKernel, pixels_cuda, n_padded, width, height, constants::CbConv, Cb_cuda);
+            threads[2] = std::thread(launchConversionKernel, pixels_cuda, n_padded, width, height, constants::CrConv, Cr_cuda);
+            
+            for(uint8_t i = 0; i < 3; i++)
+            {
+                threads[i].join();
+            }
+        } else {    // else just launch the kernels one by one
+            launchConversionKernel(pixels_cuda, n_padded, width, height, constants::YConv , Y_cuda );
+            launchConversionKernel(pixels_cuda, n_padded, width, height, constants::CbConv, Cb_cuda);
+            launchConversionKernel(pixels_cuda, n_padded, width, height, constants::CrConv, Cr_cuda);
         }
-
-        // else just launch the kernels one by one
         
-        // make sure each array has enough allocated, since image may grow due to padding to 8x8 blocks
-        Y  = (float*) realloc(Y,  n_padded * sizeof(float));
-        Cb = (float*) realloc(Cb, n_padded * sizeof(float));
-        Cr = (float*) realloc(Cr, n_padded * sizeof(float));
+
+        
+        
+        // // make sure each array has enough allocated, since image may grow due to padding to 8x8 blocks
+        // Y  = (float*) realloc(Y,  n_padded * sizeof(float));
+        // Cb = (float*) realloc(Cb, n_padded * sizeof(float));
+        // Cr = (float*) realloc(Cr, n_padded * sizeof(float));
+        // assume pointers come with enough size
 
         // copy data from cuda back to 
         cudaMemcpyAsync(Y,  Y_cuda,  n_padded * sizeof(float), cudaMemcpyDeviceToHost);
@@ -402,13 +408,6 @@ namespace gpu
 	*/
 	void transformBlock_many(const float* data, const float* scale, const uint32_t n, uint8_t* posNonZero, int16_t* quantized)
 	{
-        // Prepare scale matrix
-            // elementwise mult the given scale matrix with the dct correction matrix
-        float* new_scale;
-        cudaMallocManaged(&new_scale,constants::block_size_mem);
-        for(int i = 0; i < constants::block_size; i++)
-            new_scale[i] = constants::dct_correction_matrix[i] * scale[i];
-
         // DCT and Scale
         if(!isTransformConstsLoaded)
         {
@@ -417,8 +416,12 @@ namespace gpu
         float* data_cuda;
         cudaMalloc(&data_cuda, n*constants::block_size_mem);
         cudaMemcpy(data_cuda,data, n*constants::block_size_mem, cudaMemcpyHostToDevice);
+
+        float* scale_cuda;
+        cudaMalloc(&scale_cuda, constants::block_size_mem);
+        cudaMemcpy(scale_cuda,scale,constants::block_size_mem, cudaMemcpyHostToDevice);
         
-        DCT8x8_many(data_cuda, n, scale);
+        DCT8x8_many(data_cuda, n, scale_cuda);
 
         // quantize (process many blocks at a time with paralell inside each block too)
         int16_t* quantized_cuda;
@@ -427,6 +430,7 @@ namespace gpu
         cudaDeviceSynchronize();
 
         cudaFree(data_cuda);
+        cudaFree(scale_cuda);
 
 		// find pos non zero (paralell many blocks but serial inside block)
             // start counting from back and stop at first non-zero value, can skip most of the block then
@@ -438,17 +442,19 @@ namespace gpu
 
         find_posNonZero_many<<<cu_numBlocks,cu_blockSize>>>(quantized_cuda, n, posNonZero_cuda);
         
-        // prepare the destination pointers
-        quantized  = (int16_t*) realloc(quantized, n * constants::block_size * sizeof(int16_t));
-        posNonZero = (uint8_t*) realloc(posNonZero, n * sizeof(uint8_t));
+        // // prepare the destination pointers
+        // quantized  = (int16_t*) realloc(quantized, n * constants::block_size * sizeof(int16_t));
+        // posNonZero = (uint8_t*) realloc(posNonZero, n * sizeof(uint8_t));
         cudaDeviceSynchronize();
 
         // copy data back from the device to the cpu
-        cudaMemcpy(quantized,   quantized_cuda,   n * constants::block_size * sizeof(int16_t),  cudaMemcpyDeviceToHost);
-        cudaMemcpy(posNonZero, posNonZero_cuda, n * sizeof(uint8_t),                          cudaMemcpyDeviceToHost);
+        cudaMemcpyAsync(quantized,  quantized_cuda,  n * constants::block_size * sizeof(int16_t), cudaMemcpyDeviceToHost);
+        cudaMemcpyAsync(posNonZero, posNonZero_cuda, n * sizeof(uint8_t),                         cudaMemcpyDeviceToHost);
+        
+        cudaDeviceSynchronize();
+
         debug_log("data transformed, 1st value: " + std::to_string(quantized[0]));
         
-        cudaFree(new_scale);
         cudaFree(quantized_cuda);
         cudaFree(posNonZero_cuda);
 	}

@@ -273,7 +273,6 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 
 	PixelData process_pixels(const uint8_t* data, const int width, const int height, const bool isRGB, const bool downsample, HeaderTables tables) 
 	{
-		PixelData output;
 		// initialize gpu constants in VRAM
 		debug_log("initializing GPU");
 		debug_log("first pixel:");
@@ -296,9 +295,14 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 			delete[] LumScale;
 			delete[] ChromScale;
 		});
-		// convert image data 
-		float* Y, *Cb, *Cr;
+		// convert image data
 		debug_log("converting RGB to YCbCr");
+		const auto n_padded = (width + (width % 8 == 0 ? 0 : 8 - (width % 8))) * (height + (height % 8 == 0 ? 0 : 8 - (height % 8)));
+		PixelData output(n_padded);
+		
+		float* Y  = new float[n_padded];
+		float* Cb = new float[n_padded]; 
+		float* Cr = new float[n_padded];
 		if(isRGB) {	
 			if(downsample) {
 				debug_log("color, downsampled"); 
@@ -315,9 +319,10 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		}
 
 		debug_log("first Y: " + std::to_string(Y[0]));
+
+
 		// wait for the prep blocks thread to finish, we will need the blocks ready for the DCT
 		prep_blocks.join();
-		
 		debug_log("DCT transforming and quantizing Y");
 		gpu::transformBlock_many(Y, LumScaleDCT, output.num_blocks, output.posNonZeroY, output.quantY);
 
@@ -357,7 +362,7 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 
 		// debug_log("Checking diff");
 		// same "average color" as previous block ?
-		auto DC = int(block[0] + (block[0] >= 0 ? +0.5f : -0.5f));
+		auto DC = block[0];
 		auto diff = DC - lastDC;
 		if (diff == 0)
 			writer << huffmanDC[0x00];   // yes, write a special short symbol
@@ -407,7 +412,7 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 
 
 
-	void writeBlock_many(BitWriter& writer, HeaderTables tables, PixelData data, bool isRGB, bool downsample)
+	void writeBlock_many(BitWriter& writer, HeaderTables tables, PixelData* data, bool isRGB, bool downsample)
 	{
 		
 		// for block in data
@@ -415,9 +420,11 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 			// encode non-zeros in block
 			// encode zeros in block
 		auto chroma_i = 0;
-		int16_t lastYDC, lastCbDC, lastCrDC = 0;
-		for(auto i = 0; i < data.num_blocks; i++)
 		auto num_blocks_str = std::to_string(data->num_blocks);
+		int16_t lastYDC  = 0;
+		int16_t lastCbDC = 0;
+		int16_t lastCrDC = 0;
+		for(auto i = 0; i < data->num_blocks;)
 		{
 			std::string msg("Writing block ");
 			msg += std::to_string(i+1);
@@ -429,13 +436,15 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 			for(auto j = 0; j < (downsample ? 4 : 1); j++)
 			{
 				// encode Y
-				lastYDC = writeBlock(writer,&data.quantY[i * constants::block_size],lastYDC,tables.huffmanLuminanceDC,tables.huffmanLuminanceAC,tables.codewords,data.posNonZeroY[i]);
+				// debug_log("encoding Y");
+				// debug_log(std::string("First data in block: ") + std::to_string(data.quantY[i * constants::block_size]));
+				lastYDC = writeBlock(writer,&(data->quantY[i * constants::block_size]),lastYDC,tables.huffmanLuminanceDC,tables.huffmanLuminanceAC,tables.codewords,data->posNonZeroY[i]);
 				i++;
 			}
 			// encode Cb
-			lastCbDC = writeBlock(writer,&data.quantY[chroma_i * constants::block_size],lastCbDC,tables.huffmanChrominanceDC,tables.huffmanChrominanceAC,tables.codewords,data.posNonZeroCb[chroma_i]);
+			lastCbDC = writeBlock(writer,&(data->quantY[chroma_i * constants::block_size]),lastCbDC,tables.huffmanChrominanceDC,tables.huffmanChrominanceAC,tables.codewords,data->posNonZeroCb[chroma_i]);
 			// encode Cr
-			lastCrDC = writeBlock(writer,&data.quantY[chroma_i * constants::block_size],lastCrDC,tables.huffmanChrominanceDC,tables.huffmanChrominanceAC,tables.codewords,data.posNonZeroCr[chroma_i]);
+			lastCrDC = writeBlock(writer,&(data->quantY[chroma_i * constants::block_size]),lastCrDC,tables.huffmanChrominanceDC,tables.huffmanChrominanceAC,tables.codewords,data->posNonZeroCr[chroma_i]);
 		}
 		debug_log("finished writing blocks");
 		
@@ -679,11 +688,12 @@ namespace TooJpeg
 			Paralellizability: medium (see step 3)
 
 		*/
-
 		debug_log("running GPU code");
+		
 		PixelData data = process_pixels(pixels,width,height,isRGB,downsample,tables);
-		writeBlock_many(bitWriter,tables,data,isRGB,downsample);
 		debug_log("writing data");
+		writeBlock_many(bitWriter,tables,&data,isRGB,downsample);
+
 		debug_log("data written, flushing buffers");
 
 
