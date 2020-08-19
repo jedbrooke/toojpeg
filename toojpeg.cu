@@ -68,7 +68,7 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 		{ 0.353553, -0.490393, 0.46194, -0.415735, 0.353553, -0.277785, 0.191342,-0.0975448}
 	};
 
-	const float dct_correction_matrix[8][8] = {
+	const float dct_correction_matrix[8][8] = { // combine with the other scale matrix
 		{8.00000, 11.09631, 7.52311, 9.40692, 6.19024, 6.28556, 2.81439, 2.20719},
 		{11.09631,       1,       1,       1,       1,       1,       1,       1},
 		{9.05127,        1,       1,       1,       1,       1,       1,       1},
@@ -235,121 +235,41 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 	float rgb2cb(float r, float g, float b) { return -0.16874f * r -0.33126f * g +0.5f     * b; }
 	float rgb2cr(float r, float g, float b) { return +0.5f     * r -0.41869f * g -0.08131f * b; }
 
-	// forward DCT computation "in one dimension" (fast AAN algorithm by Arai, Agui and Nakajima: "A fast DCT-SQ scheme for images")
-	void DCT(float block[8*8], uint8_t stride) // stride must be 1 (=horizontal) or 8 (=vertical)
+	/* 
+		placeholder for GPU accelerated version
+	*/
+	void transformBlock(float block[8][8], const float scaled[8*8], int16_t quantized[8*8])
 	{
-		const auto SqrtHalfSqrt = 1.306562965f; //    sqrt((2 + sqrt(2)) / 2) = cos(pi * 1 / 8) * sqrt(2)
-		const auto InvSqrt      = 0.707106781f; // 1 / sqrt(2)                = cos(pi * 2 / 8)
-		const auto HalfSqrtSqrt = 0.382683432f; //     sqrt(2 - sqrt(2)) / 2  = cos(pi * 3 / 8)
-		const auto InvSqrtSqrt  = 0.541196100f; // 1 / sqrt(2 - sqrt(2))      = cos(pi * 3 / 8) * sqrt(2)
-
-		// modify in-place
-		auto& block0 = block[0         ];
-		auto& block1 = block[1 * stride];
-		auto& block2 = block[2 * stride];
-		auto& block3 = block[3 * stride];
-		auto& block4 = block[4 * stride];
-		auto& block5 = block[5 * stride];
-		auto& block6 = block[6 * stride];
-		auto& block7 = block[7 * stride];
-
-		// based on https://dev.w3.org/Amaya/libjpeg/jfdctflt.c , the original variable names can be found in my comments
-		auto add07 = block0 + block7; auto sub07 = block0 - block7; // tmp0, tmp7
-		auto add16 = block1 + block6; auto sub16 = block1 - block6; // tmp1, tmp6
-		auto add25 = block2 + block5; auto sub25 = block2 - block5; // tmp2, tmp5
-		auto add34 = block3 + block4; auto sub34 = block3 - block4; // tmp3, tmp4
-
-		auto add0347 = add07 + add34; auto sub07_34 = add07 - add34; // tmp10, tmp13 ("even part" / "phase 2")
-		auto add1256 = add16 + add25; auto sub16_25 = add16 - add25; // tmp11, tmp12
-
-		block0 = add0347 + add1256; block4 = add0347 - add1256; // "phase 3"
-
-		auto z1 = (sub16_25 + sub07_34) * InvSqrt; // all temporary z-variables kept their original names
-		block2 = sub07_34 + z1; block6 = sub07_34 - z1; // "phase 5"
-
-		auto sub23_45 = sub25 + sub34; // tmp10 ("odd part" / "phase 2")
-		auto sub12_56 = sub16 + sub25; // tmp11
-		auto sub01_67 = sub16 + sub07; // tmp12
-
-		auto z5 = (sub23_45 - sub01_67) * HalfSqrtSqrt;
-		auto z2 = sub23_45 * InvSqrtSqrt  + z5;
-		auto z3 = sub12_56 * InvSqrt;
-		auto z4 = sub01_67 * SqrtHalfSqrt + z5;
-		auto z6 = sub07 + z3; // z11 ("phase 5")
-		auto z7 = sub07 - z3; // z13
-		block1 = z6 + z4; block7 = z6 - z4; // "phase 6"
-		block5 = z7 + z2; block3 = z7 - z2;
-	}
-
-	void matmul_8x8(const float A[8][8], const float B[8][8], float C[8][8]) {
-		for (int i = 0; i < 8; i++)
-		{
-			for (int j = 0; j < 8; j++)
-			{ 
-				C[i][j] = 0;
-				for (int k = 0; k < 8; k++)
-				{
-					C[i][j] += A[i][k] * B[k][j];
-				}
-			}
-		}
-	}
-	void elementwise_mult_8x8(const float K[8][8],float A[8][8])
-	{
-		for (int i = 0; i < 8; i++)
-		{
-			for (int j = 0; j < 8; j++)
-			{
-				A[i][j] = K[i][j] * A[i][j];
-			}
-		}
-	}
-
-	void DCT_8x8(float A[8][8]){
-		float temp[8][8];
-		matmul_8x8(dct_matrix,A,temp);
-		matmul_8x8(temp,dct_matrix_transpose,A);
-		elementwise_mult_8x8(dct_correction_matrix,A);
-	}
-
-	// run DCT, quantize and write Huffman bit codes
-	int16_t encodeBlock(BitWriter& writer, float block[8][8], const float scaled[8*8], int16_t lastDC,
-						const BitCode huffmanDC[256], const BitCode huffmanAC[256], const BitCode* codewords)
-	{
-		// // DCT: rows
-		// for (auto offset = 0; offset < 8; offset++)
-		// 	DCT(block64 + offset*8, 1);
-		// // DCT: columns
-		// for (auto offset = 0; offset < 8; offset++)
-		// 	DCT(block64 + offset*1, 8);
-
 		/* 
-			Replace this with a gpu accelerated 8x8 DCT function
+			STEP 1: DCT
+			Paralellizability: strong (matmul)
+			Status: done, needs implementing
 		*/
-		/* DCT_8x8 */
+		/* gpu accelerated 8x8 DCT function */
 		DCT_8x8(block);
 
 		// "linearize" the 8x8 block, treat it as a flat array of 64 floats
 		auto block64 = (float*) block;
 		
-		// scale
+
+		/* 
+			Step 2: Scale
+			Paralellizability: Strong (for loop)
+			Status: not done
+		*/
 		for (auto i = 0; i < 8*8; i++)
 			block64[i] *= scaled[i];
 
-		// encode DC (the first coefficient is the "average color" of the 8x8 block)
-		auto DC = int(block64[0] + (block64[0] >= 0 ? +0.5f : -0.5f)); // C++11's nearbyint() achieves a similar effect
 
 		// quantize and zigzag the other 63 coefficients
 		auto posNonZero = 0; // find last coefficient which is not zero (because trailing zeros are encoded differently)
-		int16_t quantized[8*8];
-
 		/* 
-			CUDA Accelerate this too.
-			How efficient is it for these small matricies? 
-			Ideally we'd want to do many 8x8 blocks at a time but it seems that each block depends on the previous
+			Step 3: Quantization
+			Paralellizability: Strong (double for loop)
+			Status: not done
 		*/
 
-		for (auto i = 1; i < 8*8; i++) // start at 1 because block64[0]=DC was already processed
+		for (auto i = 0; i < 8*8; i++)
 		{
 			auto value = block64[ZigZagInv[i]];
 			// round to nearest integer
@@ -358,8 +278,79 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 			if (quantized[i] != 0)
 				posNonZero = i;
 		}
+	}
+
+	/* 
+		data is an aray of n 8*8 blocks
+		scale is an array of 8*8
+		posNonZero will store the position of the last non zero value for each N blocks
+		n is the number of blocks
+	*/
+	
+	void transformBlock_many(float* const data, const float* const scale, float* const posNonZero, const uint32_t n)
+	{
+		// DCT
+		// Scale (remove scale step from DCT and combine the scale matrix there with the one here so it's only 1 step instead of 2)
+		// quantize (process many blocks at a time with paralell inside each block too)
+		// find pos non zero (paralell many blocks but serial inside block)
+			// start counting from back and stop at first non-zero value, can skip most of the block then
+		 
+	}
+
+	/* 
+		data is (width * height) * 3
+		data[i] = r, data[i + 1] = g, data[i + 2] = b
+		Y is stored as (width/8 * height/8) * (8x8 Y block)
+		etc for Cb, Cr
+	*/
+	void convertRGBtoYCbCr444(uint8_t* data, const int width, const int height, float* Y, float* Cb, float* Cr);
+	{
+		// Y = rgb2Y(data)
+			// Y = Y - 128.f, probably in the same kernel so we dont need a deviceSynchronize
+		// Cb = rgb2Cb(data)
+		// Cr = rgb2Cr(data)
+		// cudaDeviceSynchronize
+	}
+
+	/* 
+		Y is stored as (width/8 * height/8) * (8x8 Y block)
+		Cb/Cr is stored as (width/16 * height/16) * (1 Cb 8x8 block / 1 Cr 8x8 block)
+	*/
+	void convertRGBtoYCbCr420(uint8_t* data, const int width, const int height, float* Y, float* Cb, float* Cr)
+	{
+		// Y = rgb2Y(data)
+			// Y = Y - 128.f, probably in the same kernel so we dont need a deviceSynchronize
+		// downscale RGB to 1/4 size with averages
+		// wait for the downscale kernel to finish
+		// Cb = rgb2Cb(data)
+		// Cr = rgb2Cr(data)
+		// cudaDeviceSynchronize
+	}
+
+	/* 
+		data is n * (width * height), 
+		Y is returned in data
+	*/
+	void convertBWtoY(uint8_t* data, const int width, const int height, )
+	{
+		// Y = pixel - 128.f but in CUDA
+	}
+
+	/* 
+		writes and huffman encodes the block
+	*/
+	int16_t writeBlock(BitWriter& writer, float block[8][8],int16_t lastDC,
+		const BitCode huffmanDC[256], const BitCode huffmanAC[256], const BitCode* codewords, int posNonZero)
+	{
+		auto block64 = (float*) block;
+		/* 
+			Step 5: Begin HuffmanEncoding
+			Paralellizability: none, each block depends on previous
+			Status: not done
+		*/
 
 		// same "average color" as previous block ?
+		auto DC = int(block64[0] + (block64[0] >= 0 ? +0.5f : -0.5f));
 		auto diff = DC - lastDC;
 		if (diff == 0)
 			writer << huffmanDC[0x00];   // yes, write a special short symbol
@@ -368,6 +359,12 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 			auto bits = codewords[diff]; // nope, encode the difference to previous block's average color
 			writer << huffmanDC[bits.numBits] << bits;
 		}
+
+		/* 
+			Step 6: Write the huffman encoded bits
+			Paralellizability: none (file io, bytes must be written in order)
+			Status: not done
+		*/
 
 		// encode ACs (quantized[1..63])
 		auto offset = 0; // upper 4 bits count the number of consecutive zeros
@@ -398,6 +395,18 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 
 		return DC;
 	}
+
+
+
+	void writeBlock_many(BitWriter& writer, float* const data, const uint32_t n, const BitCode huffmanDC[256], const BitCode huffmanAC[256], const BitCode* codewords)
+	{
+		// for block in data
+			// compare to DC of last block
+			// encode non-zeros in block
+			// encode zeros in block
+	
+	}
+
 
 	// Jon's code includes the pre-generated Huffman codes
 	// I don't like these "magic constants" and compute them on my own :-)
@@ -482,6 +491,8 @@ namespace TooJpeg
 		// convert to an internal JPEG quality factor, formula taken from libjpeg
 		quality = quality < 50 ? 5000 / quality : 200 - quality * 2;
 
+
+		/* Probably not worth paralellizing this step since it's only 64 loops */
 		uint8_t quantLuminance  [8*8];
 		uint8_t quantChrominance[8*8];
 		for (auto i = 0; i < 8*8; i++)
@@ -627,11 +638,32 @@ namespace TooJpeg
 		const auto sampling = downsample ? 2 : 1; // 1x1 or 2x2 sampling
 		const auto mcuSize  = 8 * sampling;
 
+
+		/* 
+			steps taken in the loop:
+			Step 1: convert rgb into YCbCr
+			Parelellizability: strong (loops)
+
+			Step 2: Encode Y
+			Paralellizability: medium
+				if we break it up into DCT, scaling, then writing, 
+				we can DCT and scale all the Y block in GPU then
+				finish the writing on the CPU
+			
+			Step 3: Perform Downsampling (is applicable)
+			Paralellizability: strong (loops)
+				can move up into first step of converting rgb to YCbCr
+
+			Step 4: Encode Cb and Cr
+			Paralellizability: medium (see step 3)
+
+		*/
+
+
 		// average color of the previous MCU
 		int16_t lastYDC = 0, lastCbDC = 0, lastCrDC = 0;
 		// convert from RGB to YCbCr
 		float Y[8][8], Cb[8][8], Cr[8][8];
-
 		for (auto mcuY = 0; mcuY < height; mcuY += mcuSize) // each step is either 8 or 16 (=mcuSize)
 		for (auto mcuX = 0; mcuX < width; mcuX += mcuSize)
 		{
@@ -650,7 +682,7 @@ namespace TooJpeg
 						// find actual pixel position within the current image
 						auto pixelPos = row * int(width) + column; // the cast ensures that we don't run into multiplication overflows
 						if (column < maxWidth)
-						column++;
+							column++;
 
 						// grayscale images have solely a Y channel which can be easily derived from the input pixel by shifting it by 128
 						if (!isRGB)
