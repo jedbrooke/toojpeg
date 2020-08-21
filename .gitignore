@@ -1,4 +1,6 @@
 .DS_Store
+examples/*
+.vscode/settings.json
 examples/example_modified
 examples/example
 .vscode/*
