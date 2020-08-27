@@ -1,26 +1,31 @@
 #include "utility.h"
 
 namespace utility{
+    void set_stream(std::ostream* s)
+    {
+        utility::out = s;
+    }
+    
     void print_array(int n, float* a)
     {
         for (int i = 0; i < n - 1; i++)
         {
-            std::cout << a[i] << ", ";
+            *utility::out << a[i] << ", ";
         }
-        std::cout << a[n-1];
+        *utility::out << a[n-1];
     }
 
     void print_8x8(float A[8][8])
     {
-        std::cout << "{";
+        *utility::out << "{";
         for (int i = 0; i < 8; i++)
         { 
             std:: cout << "{";
             for (int j = 0; j < 7; j++)
             {
-                std::cout << A[i][j] << ", ";
+                *utility::out << A[i][j] << ", ";
             }
-            std::cout << A[i][7] << "}," << std::endl;
+            *utility::out << A[i][7] << "}," << std::endl;
         }
     }
 
@@ -29,9 +34,9 @@ namespace utility{
     {
         for (int i = 0; i < m; i++)
         {
-            std::cout << "[";
+            *utility::out << "[";
             print_array(n,a[i]);
-            std::cout << "]\n";
+            *utility::out << "]\n";
         }
     }
 
@@ -39,18 +44,18 @@ namespace utility{
     {
         for (int i = 0; i < m; i++)
         {
-            std::cout << "[";
+            *utility::out << "[";
             print_array(n,&a[i*n]);
-            std::cout << "]\n";
+            *utility::out << "]\n";
         }
     }
 
     void print_array_3d(int x, int y, int z, float* a)
     {
         for (int i = 0; i < x; i++){
-            std::cout << "[";
+            *utility::out << "[";
             print_array_2d(y,z,&a[i*y*z]);
-            std::cout << "]\n";
+            *utility::out << "]\n";
         }
     }
 
