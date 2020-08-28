@@ -1,5 +1,4 @@
 .DS_Store
-examples/*
 .vscode/settings.json
 examples/example_modified
 examples/example
@@ -14,3 +13,7 @@ examples/example_large.jpg
 *.o
 example_cuda.jpg
 examples/example_cuda
+examples/lemon
+examples/lemon.bmp
+examples/lemon.jpg
+examples/lemon2.bmp
