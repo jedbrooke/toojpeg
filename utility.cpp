@@ -1,12 +1,22 @@
 #include "utility.h"
 
 namespace utility{
+    std::ostream* out; 
     void set_stream(std::ostream* s)
     {
         utility::out = s;
     }
     
     void print_array(int n, float* a)
+    {
+        for (int i = 0; i < n - 1; i++)
+        {
+            *utility::out << a[i] << ", ";
+        }
+        *utility::out << a[n-1];
+    }
+
+    void print_array(int n, int16_t* a)
     {
         for (int i = 0; i < n - 1; i++)
         {

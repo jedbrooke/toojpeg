@@ -75,9 +75,9 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 	struct BitWriter
 	{
 		// user-supplied callback that writes/stores one byte
-		TooJpeg::WRITE_ONE_BYTE output;
+		TooJpeg_cuda::WRITE_ONE_BYTE output;
 		// initialize writer
-		explicit BitWriter(TooJpeg::WRITE_ONE_BYTE output_) : output(output_) {}
+		explicit BitWriter(TooJpeg_cuda::WRITE_ONE_BYTE output_) : output(output_) {}
 
 		// store the most recently encoded bits that are not written yet
 		struct BitBuffer
@@ -359,6 +359,7 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 			Paralellizability: none, each block depends on previous
 			Status: not done
 		*/
+		utility::print_array(64,block);
 
 		// debug_log("Checking diff");
 		// same "average color" as previous block ?
@@ -641,7 +642,7 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 
 // -------------------- externally visible code --------------------
 
-namespace TooJpeg
+namespace TooJpeg_cuda
 {
 	// the only exported function ...
 	bool writeJpeg(WRITE_ONE_BYTE output, const void* pixels_, unsigned short width, unsigned short height,

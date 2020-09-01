@@ -20,10 +20,11 @@
 #include <string.h>
 #include <iostream>
 #include "gpu.h"
+#include "utility.h"
 
 #define PRINT_DEBUG true
 
-namespace TooJpeg
+namespace TooJpeg_cuda
 {
 	// write one byte (to disk, memory, ...)
 	typedef void (*WRITE_ONE_BYTE)(unsigned char);

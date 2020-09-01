@@ -1,16 +1,17 @@
 #include <iostream>
 #include <sstream>
 #include <fstream>
-#include <string>
+#include <string.h>
+
 
 #if __has_include(<algorithm>)
 #include <algorithm>
 #endif
 
 namespace utility{
-    std::ostream* out = &std::cout; 
     void set_stream(std::ostream* s);
-    void print_array(int n, float* a);
+    void print_array(int n, void* a);
+    void print_array(int n, int16_t* a);
     void print_8x8(float A[8][8]);
     void print_array_2d(int m, int n, float** a);
     void print_array_2d(int m, int n, float* a);

@@ -4,7 +4,7 @@
 // see https://create.stephan-brumme.com/toojpeg/
 //
 
-#include "toojpeg_modified.h"
+#include "toojpeg_cpu.h"
 
 // - the "official" specifications: https://www.w3.org/Graphics/JPEG/itu-t81.pdf and https://www.w3.org/Graphics/JPEG/jfif3.pdf
 // - Wikipedia has a short description of the JFIF/JPEG file format: https://en.wikipedia.org/wiki/JPEG_File_Interchange_Format
@@ -338,11 +338,11 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 
 		// encode DC (the first coefficient is the "average color" of the 8x8 block)
 		auto DC = int(block64[0] + (block64[0] >= 0 ? +0.5f : -0.5f)); // C++11's nearbyint() achieves a similar effect
-
+	
 		// quantize and zigzag the other 63 coefficients
 		auto posNonZero = 0; // find last coefficient which is not zero (because trailing zeros are encoded differently)
 		int16_t quantized[8*8];
-
+		quantized[0] = DC;
 		/* 
 			CUDA Accelerate this too.
 			How efficient is it for these small matricies? 
@@ -358,6 +358,7 @@ namespace // anonymous namespace to hide local functions / constants / etc.
 			if (quantized[i] != 0)
 				posNonZero = i;
 		}
+		utility::print_array(64,quantized);
 
 		// same "average color" as previous block ?
 		auto diff = DC - lastDC;
